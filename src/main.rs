@@ -45,7 +45,7 @@ async fn main() {
     let app = Router::new()
         .route("/upload", post(upload_handler))
         .route("/download/:uuid", get(download_handler))
-        .route("/get_name/:uuid", get(file_name_handler))
+        .route("/filename/:uuid", get(file_name_handler))
         .layer(cors_layer())
         .with_state(model);
 
