@@ -39,7 +39,7 @@ as follows:
 
 ## API
 
-### <kbd>POST <kbd>/upload</kbd>
+### <kbd>POST</kbd> <kbd>/upload</kbd>
 
 Upload a file to the server. The file is expected to be sent as the request
 body. The file name is expected to be sent as the `X-File-Name` header.
