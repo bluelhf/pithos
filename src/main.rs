@@ -13,6 +13,7 @@ use axum::http::{Method, Request, Response};
 use axum::http::response::Builder;
 use axum::routing::get;
 use axum_server::tls_rustls::RustlsConfig;
+use hyper::StatusCode;
 use tokio::fs::File;
 
 use tokio_util::io::ReaderStream;
@@ -66,9 +67,11 @@ async fn upload_handler(
     State(model): State<&'static Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
     request: Request<Body>
-) -> Result<String, PilviError> {
+) -> Result<Response<String>, PilviError> {
     model.write_file(&x_file_name.0, request.into_body()).await
-        .map(|uuid| uuid.to_string())
+        .map(|uuid| Response::builder()
+            .status(StatusCode::CREATED)
+            .body(uuid.to_string()).unwrap()) // unwrap is safe because we know the status code is valid
 }
 
 #[axum_macros::debug_handler]
