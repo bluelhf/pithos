@@ -33,6 +33,7 @@ checksum = "6e5abc76e6ef57bf438c067d2898481475994102eeb5d662a0b2162d0c2fdcf1"
 dependencies = [
  "async-trait",
  "axum-core",
+ "axum-macros",
  "bitflags",
  "bytes",
  "futures-util",
@@ -556,25 +557,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "478c572c3d73181ff3c2539045f6eb99e5491218eae919370993b890cdbdd98e"
 
 [[package]]
-name = "pilvi-backend-rs"
-version = "0.1.0"
-dependencies = [
- "axum",
- "axum-macros",
- "axum-server",
- "futures",
- "hyper",
- "lazy_static",
- "tokio",
- "tokio-util",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.0.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -611,7 +593,6 @@ name = "pithos"
 version = "0.1.0"
 dependencies = [
  "axum",
- "axum-macros",
  "axum-server",
  "futures",
  "hyper",
