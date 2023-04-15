@@ -1,12 +1,11 @@
-# Pilvi Back-end
+# Pithos
 
-This is the back-end for the Pilvi project. Pilvi is an end-to-end encrypted
-file sharing service. The back-end does not perform any encryption, merely
-storing and retrieving files. The front-end is responsible for encryption.
+Pithos is the back-end server for Anesidora, an end-to-end encrypted
+file sharing service. It is written in Rust and uses HTTP/2 for
+communication.
 
-Alongside the file contents themselves, the back-end also stores the name of
-the file. This is to allow the front-end to display the name of the file in the
-file dialog.
+For encryption, see the [Anesidora](https://github.com/bluelhf/Anesidora)
+front-end repository.
 
 ## HTTP/2
 
@@ -26,7 +25,7 @@ placed in the `tls` directory at the repository root. The certificate
 should be named `cert.pem` and the private key `key.pem`.
 
 ## File Format
-Pilvi does not use a database to store files. Instead, all files are stored
+Pithos does not use a database to store files. Instead, all files are stored
 in a common directory, and identified by a UUID. The file format is a binary
 format with simple metadata at the beginning of the file. Files are stored
 as follows:
