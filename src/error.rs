@@ -5,6 +5,7 @@ use std::string::FromUtf8Error;
 use axum::http;
 use axum::response::{IntoResponse, Response};
 use http::status::StatusCode;
+use tracing::error;
 
 #[derive(Debug)]
 pub enum PilviError {
@@ -27,6 +28,9 @@ impl PilviError {
 
 impl fmt::Display for PilviError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // FIXME(ilari): this is a dirty hack, figure out how to
+        //               actually log properly with axum
+        error!("{:?}", self);
         match self {
             PilviError::FileSystemError(_) => { write!(f, "There was an unexpected file system error while storing your file in the cloud.") }
             PilviError::ContentReadError(_) => { write!(f, "There was an error transmitting your file over the internet.") }
