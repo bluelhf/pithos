@@ -62,7 +62,7 @@ fn cors_layer() -> CorsLayer {
         .allow_origin(cors::Any)
 }
 
-#[axum_macros::debug_handler]
+#[axum::debug_handler]
 async fn upload_handler(
     State(model): State<&'static Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
@@ -74,7 +74,7 @@ async fn upload_handler(
             .body(uuid.to_string()).unwrap()) // unwrap is safe because we know the status code is valid
 }
 
-#[axum_macros::debug_handler]
+#[axum::debug_handler]
 async fn file_name_handler(
     State(model): State<&'static Model>,
     Path(uuid): Path<Uuid>
@@ -84,7 +84,7 @@ async fn file_name_handler(
 
 type FileResponse = Response<StreamBody<ReaderStream<File>>>;
 
-#[axum_macros::debug_handler]
+#[axum::debug_handler]
 async fn download_handler(
     State(model): State<&'static Model>,
     Path(uuid): Path<Uuid>
