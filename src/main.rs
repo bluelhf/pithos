@@ -2,33 +2,38 @@
 #![feature(try_blocks)]
 #![feature(once_cell)]
 
+mod custom_headers;
+mod model;
+mod error;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
-
-use axum::{http, Router, routing::post, TypedHeader};
-use axum::body::{Body, StreamBody};
-use axum::extract::{Path, State};
-use axum::http::{Method, Request, Response};
-use axum::http::response::Builder;
-use axum::routing::get;
-use axum_server::tls_rustls::RustlsConfig;
-use hyper::StatusCode;
+use std::{net::SocketAddr, path::PathBuf};
+use uuid::Uuid;
 use tokio::fs::File;
+
+use axum::{
+    http::{
+        header::CONTENT_TYPE,
+        method::Method,
+        response::Response,
+        StatusCode,
+    },
+    routing::{get, post},
+    extract::{BodyStream, Path, State},
+    Router,
+    body::StreamBody,
+    TypedHeader,
+};
+
+use axum_server::tls_rustls::RustlsConfig;
+use tower_http::cors::{CorsLayer, Any};
 
 use tokio_util::io::ReaderStream;
 
-use tower_http::cors;
-use tower_http::cors::CorsLayer;
-use uuid::Uuid;
-
-use crate::error::PilviError;
-use crate::header::{X_FILE_NAME, XFileName};
-use crate::model::Model;
-
-mod header;
-mod model;
-mod error;
+use crate::{
+    error::PilviError,
+    custom_headers::{X_FILE_NAME, XFileName},
+    model::Model,
+};
 
 #[tokio::main]
 async fn main() {
@@ -45,7 +50,6 @@ async fn main() {
     let app = Router::new()
         .route("/upload", post(upload_handler))
         .route("/download/:uuid", get(download_handler))
-        .route("/filename/:uuid", get(file_name_handler))
         .layer(cors_layer())
         .with_state(model);
 
@@ -57,29 +61,21 @@ async fn main() {
 
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .allow_headers(vec![X_FILE_NAME.to_owned(), http::header::CONTENT_TYPE])
+        .allow_headers(vec![X_FILE_NAME.to_owned(), CONTENT_TYPE])
         .allow_methods([Method::GET, Method::POST])
-        .allow_origin(cors::Any)
+        .allow_origin(Any)
 }
 
 #[axum::debug_handler]
 async fn upload_handler(
     State(model): State<&'static Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
-    request: Request<Body>
+    body: BodyStream
 ) -> Result<Response<String>, PilviError> {
-    model.write_file(&x_file_name.0, request.into_body()).await
+    model.write_file(&x_file_name.0, body).await
         .map(|uuid| Response::builder()
             .status(StatusCode::CREATED)
             .body(uuid.to_string()).unwrap()) // unwrap is safe because we know the status code is valid
-}
-
-#[axum::debug_handler]
-async fn file_name_handler(
-    State(model): State<&'static Model>,
-    Path(uuid): Path<Uuid>
-) -> Result<String, PilviError> {
-    Ok(model.read_file(uuid).await?.0)
 }
 
 type FileResponse = Response<StreamBody<ReaderStream<File>>>;
@@ -91,7 +87,7 @@ async fn download_handler(
 ) -> Result<FileResponse, PilviError> {
     let (name, body) = model.read_file(uuid).await?;
 
-    Ok(Builder::new()
-        .header("X-File-Name", name)
+    Ok(Response::builder()
+        .header(X_FILE_NAME.to_string(), name)
         .body(StreamBody::new(body)).unwrap())
 }

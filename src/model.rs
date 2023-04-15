@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use axum::body::Body;
+use axum::extract::BodyStream;
 use futures::StreamExt;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::io::ReaderStream;
@@ -21,7 +21,7 @@ impl Model {
         tokio::fs::create_dir(&self.storage_directory).await.map_err(Into::into)
     }
 
-    pub async fn write_file(&self, file_name: &str, mut file_content: Body) -> Result<Uuid, PilviError> {
+    pub async fn write_file(&self, file_name: &str, mut file_content: BodyStream) -> Result<Uuid, PilviError> {
         self.try_create_storage().await?;
 
         let id = Uuid::new_v4();

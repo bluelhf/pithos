@@ -11,7 +11,7 @@ pub enum PilviError {
     FileSystemError(io::Error),
     NoSuchFileError(io::Error),
     FileCorruptedError(FromUtf8Error),
-    ContentReadError(hyper::Error),
+    ContentReadError(axum::Error),
 }
 
 impl PilviError {
@@ -56,11 +56,12 @@ impl From<io::Error> for PilviError {
     }
 }
 
-impl From<hyper::Error> for PilviError {
-    fn from(e: hyper::Error) -> Self {
+impl From<axum::Error> for PilviError {
+    fn from(e: axum::Error) -> Self {
         PilviError::ContentReadError(e)
     }
 }
+
 
 impl From<FromUtf8Error> for PilviError {
     fn from(e: FromUtf8Error) -> Self {
