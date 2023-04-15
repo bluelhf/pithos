@@ -1,3 +1,4 @@
+use std::io::ErrorKind::AlreadyExists;
 use std::path::PathBuf;
 use axum::extract::BodyStream;
 use futures::StreamExt;
@@ -18,7 +19,12 @@ impl Model {
     }
 
     async fn try_create_storage(&self) -> Result<(), PilviError> {
-        tokio::fs::create_dir(&self.storage_directory).await.map_err(Into::into)
+        match tokio::fs::create_dir(&self.storage_directory).await {
+            Ok(_) => Ok(()),
+            Err(error) => {
+                if error.kind() == AlreadyExists { Ok(()) } else { Err(error.into()) }
+            }
+        }
     }
 
     pub async fn write_file(&self, file_name: &str, mut file_content: BodyStream) -> Result<Uuid, PilviError> {
