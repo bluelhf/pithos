@@ -23,6 +23,8 @@ use axum::{
     body::StreamBody,
     TypedHeader,
 };
+use axum::http::{HeaderName};
+use axum::response::{IntoResponse};
 
 use axum_server::tls_rustls::RustlsConfig;
 use tower_http::cors::{CorsLayer, Any};
@@ -71,23 +73,17 @@ async fn upload_handler(
     State(model): State<&'static Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
     body: BodyStream
-) -> Result<Response<String>, PilviError> {
+) -> Result<(StatusCode, String), PilviError> {
     model.write_file(&x_file_name.0, body).await
-        .map(|uuid| Response::builder()
-            .status(StatusCode::CREATED)
-            .body(uuid.to_string()).unwrap()) // unwrap is safe because we know the status code is valid
+        .map(|uuid| (StatusCode::CREATED, uuid.to_string()))
 }
-
-type FileResponse = Response<StreamBody<ReaderStream<File>>>;
 
 #[axum::debug_handler]
 async fn download_handler(
     State(model): State<&'static Model>,
     Path(uuid): Path<Uuid>
-) -> Result<FileResponse, PilviError> {
+) -> Result<([(HeaderName, String); 1], impl IntoResponse), PilviError> {
     let (name, body) = model.read_file(uuid).await?;
 
-    Ok(Response::builder()
-        .header(X_FILE_NAME.to_string(), name)
-        .body(StreamBody::new(body)).unwrap())
+    Ok(([(X_FILE_NAME.into(), name)], StreamBody::new(body)))
 }

@@ -1,17 +1,26 @@
-use axum::headers;
-
-use axum::headers::{Header, HeaderName, HeaderValue};
+use axum::headers::{self, Header, HeaderName, HeaderValue};
 use lazy_static::lazy_static;
 
+pub const X_FILE_NAME: XFileNameHeaderName = XFileNameHeaderName {};
+
 lazy_static! {
-    pub static ref X_FILE_NAME: HeaderName = HeaderName::from_lowercase(b"x-file-name").unwrap();
+    static ref INTERNAL_TEXT: &'static [u8] = "x-file-name".as_bytes();
+    static ref INTERNAL_NAME: HeaderName = HeaderName::from_lowercase(&INTERNAL_TEXT).unwrap();
+}
+
+pub struct XFileNameHeaderName;
+
+impl Into<HeaderName> for XFileNameHeaderName {
+    fn into(self) -> HeaderName {
+        INTERNAL_NAME.clone()
+    }
 }
 
 pub struct XFileName(pub String);
 
 impl Header for XFileName {
     fn name() -> &'static HeaderName {
-        &X_FILE_NAME
+        &INTERNAL_NAME
     }
 
     fn decode<'i, I>(values: &mut I) -> Result<Self, headers::Error>
