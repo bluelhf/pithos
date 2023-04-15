@@ -47,18 +47,16 @@ If successful, the response status code will be `201 Created`, and the response 
 
 Otherwise, the response status code will be in the range 400—599 and the response body will contain an error message.
 
+### <kbd>HEAD</kbd> <kbd>/download/:uuid</kbd>
+
+Same as <kbd>GET</kbd> <kbd>/download/:uuid</kbd>, but without the file contents.
+Useful for reading the file name without downloading the file in advance, e.g. for
+displaying a file name in a download dialog.
+
 ### <kbd>GET</kbd> <kbd>/download/:uuid</kbd>
 
 Download a file from the server. The file will be sent as the response body.
 The file name will be sent as the `X-File-Name` header.
-
-If successful, the response status code will be `200 OK`.
-
-Otherwise, the response status code will be in the range 400—599 and the response body will contain an error message.
-
-### <kbd>GET</kbd> <kbd>/filename/:uuid</kbd>
-
-Get the file name of a file. The file name will be sent as the response body.
 
 If successful, the response status code will be `200 OK`.
 
