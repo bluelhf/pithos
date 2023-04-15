@@ -8,13 +8,11 @@ mod error;
 
 use std::{net::SocketAddr, path::PathBuf};
 use uuid::Uuid;
-use tokio::fs::File;
 
 use axum::{
     http::{
         header::CONTENT_TYPE,
         method::Method,
-        response::Response,
         StatusCode,
     },
     routing::{get, post},
@@ -28,8 +26,6 @@ use axum::response::{IntoResponse};
 
 use axum_server::tls_rustls::RustlsConfig;
 use tower_http::cors::{CorsLayer, Any};
-
-use tokio_util::io::ReaderStream;
 
 use crate::{
     error::PilviError,
@@ -63,8 +59,9 @@ async fn main() {
 
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .allow_headers(vec![X_FILE_NAME.to_owned(), CONTENT_TYPE])
-        .allow_methods([Method::GET, Method::POST])
+        .expose_headers(vec![X_FILE_NAME.into()])
+        .allow_headers(vec![X_FILE_NAME.into(), CONTENT_TYPE])
+        .allow_methods([Method::HEAD, Method::GET, Method::POST])
         .allow_origin(Any)
 }
 
