@@ -45,9 +45,10 @@ impl Model {
         Ok(id)
     }
 
-    pub async fn read_file(&self, file_identifier: Uuid) -> Result<(String, ReaderStream<tokio::fs::File>), PilviError> {
+    pub async fn read_file(&self, file_identifier: Uuid) -> Result<(String, u64, ReaderStream<tokio::fs::File>), PilviError> {
         let file_path = self.storage_directory.join(file_identifier.to_string());
         let mut file = tokio::fs::File::open(&file_path).await?;
+        file.sync_all().await?;
 
         let length = file.read_u64().await?;
         let mut file_name = vec![0; length as usize];
@@ -55,6 +56,6 @@ impl Model {
 
         let file_name = String::from_utf8(file_name)?;
 
-        Ok((file_name, ReaderStream::new(file)))
+        Ok((file_name, file.metadata().await?.len() - 8 - length, ReaderStream::new(file)))
     }
 }

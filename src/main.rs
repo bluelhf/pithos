@@ -1,3 +1,4 @@
+#![feature(seek_stream_len)]
 #![feature(async_closure)]
 #![feature(try_blocks)]
 #![feature(once_cell)]
@@ -22,6 +23,7 @@ use axum::{
     TypedHeader,
 };
 use axum::http::{HeaderName};
+use axum::http::header::CONTENT_LENGTH;
 use axum::response::{IntoResponse};
 
 use axum_server::tls_rustls::RustlsConfig;
@@ -59,7 +61,7 @@ async fn main() {
 
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .expose_headers(vec![X_FILE_NAME.into()])
+        .expose_headers(vec![X_FILE_NAME.into(), CONTENT_LENGTH])
         .allow_headers(vec![X_FILE_NAME.into(), CONTENT_TYPE])
         .allow_methods([Method::HEAD, Method::GET, Method::POST])
         .allow_origin(Any)
@@ -79,8 +81,8 @@ async fn upload_handler(
 async fn download_handler(
     State(model): State<&'static Model>,
     Path(uuid): Path<Uuid>
-) -> Result<([(HeaderName, String); 1], impl IntoResponse), PilviError> {
-    let (name, body) = model.read_file(uuid).await?;
+) -> Result<([(HeaderName, String); 2], impl IntoResponse), PilviError> {
+    let (name, length, body) = model.read_file(uuid).await?;
 
-    Ok(([(X_FILE_NAME.into(), name)], StreamBody::new(body)))
+    Ok(([(X_FILE_NAME.into(), name), (CONTENT_LENGTH, length.to_string())], StreamBody::new(body)))
 }
