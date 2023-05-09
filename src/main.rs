@@ -1,6 +1,11 @@
+#![feature(async_fn_in_trait)]
 #![feature(seek_stream_len)]
+#![feature(trivial_bounds)]
 #![feature(async_closure)]
+#![feature(return_position_impl_trait_in_trait)]
 #![feature(try_blocks)]
+
+extern crate core;
 
 mod custom_headers;
 mod model;
@@ -9,24 +14,19 @@ mod error;
 use std::net::SocketAddr;
 use uuid::Uuid;
 
-use axum::{
-    http::{
-        header::CONTENT_TYPE,
-        method::Method,
-        StatusCode,
-    },
-    routing::{get, post},
-    extract::{BodyStream, Path, State},
-    Router,
-    body::StreamBody,
-    TypedHeader,
-};
-use axum::http::{HeaderName};
+use axum::{http::{
+    header::CONTENT_TYPE,
+    method::Method,
+    StatusCode,
+}, routing::{get, post}, extract::{BodyStream, Path, State}, Router, body::StreamBody, TypedHeader, headers};
+use axum::http::HeaderName;
 use axum::http::header::CONTENT_LENGTH;
 use axum::response::{IntoResponse};
 
 #[cfg(feature = "tls")] use axum_server::tls_rustls::RustlsConfig;
 #[cfg(feature = "tls")] use std::path::PathBuf;
+use axum::headers::HeaderMap;
+use headers::ContentLength;
 
 
 use tower_http::cors::{CorsLayer, Any};
@@ -36,14 +36,20 @@ use crate::{
     custom_headers::{X_FILE_NAME, XFileName},
     model::Model,
 };
+use crate::model::GoogleCloudStorageModel;
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
+    let model = GoogleCloudStorageModel::with_bucket(
+        std::env::var("BUCKET_NAME").expect("BUCKET_NAME environment variable must be set"),
+        cloud_storage::Client::new(),
+    ).await.expect("failed to create GoogleCloudStorageModel");
+    //let model = LocalFilesystemModel::with_storage("files".into());
 
     // Model lives for the lifetime of the program — it is 'effectively static' so fine to leak
-    let model: &'static Model = Box::leak(Box::new(Model::with_storage("files".into())));
+    let model: &'static dyn Model = Box::leak(Box::new(model));
 
     let app = Router::new()
         .route("/upload", post(upload_handler))
@@ -86,20 +92,26 @@ fn cors_layer() -> CorsLayer {
 
 #[axum::debug_handler]
 async fn upload_handler(
-    State(model): State<&'static Model>,
+    State(model): State<&'static dyn Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
+    TypedHeader(content_length): TypedHeader<ContentLength>,
     body: BodyStream
 ) -> Result<(StatusCode, String), PilviError> {
-    model.write_file(&x_file_name.0, body).await
+    model.write_file(&x_file_name.0, content_length.0, body).await
         .map(|uuid| (StatusCode::CREATED, uuid.to_string()))
 }
 
 #[axum::debug_handler]
 async fn download_handler(
-    State(model): State<&'static Model>,
+    State(model): State<&'static dyn Model>,
     Path(uuid): Path<Uuid>
-) -> Result<([(HeaderName, String); 2], impl IntoResponse), PilviError> {
+) -> Result<(HeaderMap, impl IntoResponse), PilviError> {
     let (name, length, body) = model.read_file(uuid).await?;
 
-    Ok(([(X_FILE_NAME.into(), name), (CONTENT_LENGTH, length.to_string())], StreamBody::new(body)))
+    let mut map = HeaderMap::new();
+    map.insert::<HeaderName>(X_FILE_NAME.into(), name.clone().parse()?);
+    if let Some(length) = length {
+        map.insert(CONTENT_LENGTH, length.to_string().parse()?);
+    }
+    Ok((map, StreamBody::new(body)))
 }

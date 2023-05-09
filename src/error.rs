@@ -1,18 +1,47 @@
 use std::error::Error;
 use std::{fmt, io};
-use std::fmt::Formatter;
+use std::fmt::{Debug, Display, Formatter};
 use std::string::FromUtf8Error;
 use axum::http;
 use axum::response::{IntoResponse, Response};
 use http::status::StatusCode;
+use hyper::header::InvalidHeaderValue;
+use hyper::http::uri::InvalidUri;
 use tracing::error;
 
 #[derive(Debug)]
 pub enum PilviError {
     FileSystemError(io::Error),
     NoSuchFileError(io::Error),
-    FileCorruptedError(FromUtf8Error),
+    FileCorruptedError(CorruptionError),
     ContentReadError(axum::Error),
+}
+
+#[derive(Debug)]
+pub enum CorruptionError {
+    InvalidHeader(InvalidHeaderValue),
+    InvalidUri(InvalidUri),
+    InvalidFileName(FromUtf8Error),
+}
+
+impl Display for CorruptionError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            CorruptionError::InvalidHeader(_) => { write!(f, "The server tried to send invalid data.") }
+            CorruptionError::InvalidUri(_) => { write!(f, "Google Cloud Storage returned an invalid object URI.") }
+            CorruptionError::InvalidFileName(_) => { write!(f, "The requested file has been corrupted.") }
+        }
+    }
+}
+
+impl Error for CorruptionError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            CorruptionError::InvalidHeader(e) => Some(e),
+            CorruptionError::InvalidUri(e) => Some(e),
+            CorruptionError::InvalidFileName(e) => Some(e)
+        }
+    }
 }
 
 impl PilviError {
@@ -26,7 +55,7 @@ impl PilviError {
     }
 }
 
-impl fmt::Display for PilviError {
+impl Display for PilviError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         // FIXME(ilari): this is a dirty hack, figure out how to
         //               actually log properly with axum
@@ -66,10 +95,34 @@ impl From<axum::Error> for PilviError {
     }
 }
 
+impl From<hyper::Error> for PilviError {
+    fn from(e: hyper::Error) -> Self {
+        PilviError::FileSystemError(io::Error::new(io::ErrorKind::Other, e))
+    }
+}
+
 
 impl From<FromUtf8Error> for PilviError {
     fn from(e: FromUtf8Error) -> Self {
-        PilviError::FileCorruptedError(e)
+        PilviError::FileCorruptedError(CorruptionError::InvalidFileName(e))
+    }
+}
+
+impl From<cloud_storage::Error> for PilviError {
+    fn from(e: cloud_storage::Error) -> Self {
+        PilviError::FileSystemError(io::Error::new(io::ErrorKind::Other, e))
+    }
+}
+
+impl From<InvalidUri> for PilviError {
+    fn from(e: InvalidUri) -> Self {
+        PilviError::FileCorruptedError(CorruptionError::InvalidUri(e))
+    }
+}
+
+impl From<InvalidHeaderValue> for PilviError {
+    fn from(e: InvalidHeaderValue) -> Self {
+        PilviError::FileCorruptedError(CorruptionError::InvalidHeader(e))
     }
 }
 
