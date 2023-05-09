@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use axum::BoxError;
 use axum::extract::BodyStream;
 use bytes::Bytes;
-use futures::{Stream, StreamExt, TryStream, TryStreamExt};
+use futures::StreamExt;
 use hyper::{Body, Uri};
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
