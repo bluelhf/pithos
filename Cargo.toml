@@ -3,9 +3,12 @@ name = "pithos"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+tls = []
+
 [dependencies]
 axum = { version = "0.6.14", features = ["http2", "headers", "macros"] }
-axum-server = { version = "0.4.7", features = ["tls-rustls"] }
+axum-server = { version = "0.5.0", features = ["tls-rustls"] }
 
 hyper = "0.14.25"
 tower = "0.4.13"
