@@ -1,7 +1,6 @@
 #![feature(seek_stream_len)]
 #![feature(async_closure)]
 #![feature(try_blocks)]
-#![feature(once_cell)]
 
 mod custom_headers;
 mod model;
