@@ -24,6 +24,8 @@ Once the certificate and private key have been generated, they are to be
 placed in the `tls` directory at the repository root. The certificate
 should be named `cert.pem` and the private key `key.pem`.
 
+The `tls` feature should be enabled in the crate to add support for TLS.
+
 ## File Format
 Pithos does not use a database to store files. Instead, all files are stored
 in a common directory, and identified by a UUID. The file format is a binary
