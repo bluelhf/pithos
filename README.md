@@ -11,7 +11,7 @@ front-end repository.
 
 The back-end uses HTTP/2 for communication. This is to allow the front-end
 to stream large files to the back-end without having to load the entire file
-into memory. That being said, this also means that TLS is required.
+into memory.
 
 ### TLS set-up for local development
 
