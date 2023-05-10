@@ -1,15 +1,17 @@
+use std::collections::VecDeque;
+use std::io;
+use std::io::ErrorKind;
 use async_trait::async_trait;
 
 use std::io::ErrorKind::AlreadyExists;
 use std::path::PathBuf;
-use axum::BoxError;
 use axum::extract::BodyStream;
 use bytes::Bytes;
-use futures::StreamExt;
-use hyper::{Body, Uri};
+use futures::{StreamExt, TryStreamExt};
+use hyper::Body;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio_util::io::ReaderStream;
+use tokio_util::io::{ReaderStream, StreamReader};
 use uuid::Uuid;
 use crate::error::PilviError;
 
@@ -24,7 +26,6 @@ pub(crate) trait Model: Sync + Send {
 pub struct GoogleCloudStorageModel {
     client: cloud_storage::Client,
     bucket: cloud_storage::bucket::Bucket,
-    http_client: hyper::Client<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>>,
 }
 
 impl GoogleCloudStorageModel {
@@ -32,8 +33,6 @@ impl GoogleCloudStorageModel {
         Ok(Self {
             bucket: client.bucket().read(&bucket_name).await?,
             client,
-            http_client: hyper::Client::builder().build(hyper_rustls::HttpsConnectorBuilder::new()
-                .with_native_roots().https_or_http().enable_all_versions().build()),
         })
     }
 }
@@ -48,13 +47,13 @@ impl Model for GoogleCloudStorageModel {
 
         let stream = futures::stream::iter(vec![Ok(length), Ok(file_name_bytes.clone())].into_iter()).chain(file_content.map(
             |chunk| {
-                Ok::<_, PilviError>(bytes::Bytes::from(chunk?))
+                Ok::<_, PilviError>(chunk?)
             }
         ));
 
         self.client.object()
             .create_streamed(
-                &*self.bucket.name, stream, content_length.map(|l| l + file_name_bytes.len() as u64 + 8),
+                &self.bucket.name, stream, content_length.map(|l| l + file_name_bytes.len() as u64 + 8),
                 &id.to_string(), "application/octet-stream"
             ).await?;
 
@@ -62,27 +61,25 @@ impl Model for GoogleCloudStorageModel {
     }
 
     async fn read_file(&self, file_identifier: Uuid) -> Result<(String, Option<u64>, Body), PilviError> {
-        let object = self.client.object().read(&*self.bucket.name, &file_identifier.to_string()).await?;
-        let object_metadata = object.download_url(60)?;
+        let mut body = StreamReader::new(self.client.object()
+            .download_streamed(&self.bucket.name, &file_identifier.to_string())
+            .await?.chunks(1024)
+            .map(|c| c.into_iter().collect::<Result<VecDeque<u8>, cloud_storage::Error>>())
+            .map(|e| e.map_err(|err| {
+                io::Error::new(ErrorKind::Other, err)
+            }))
+        );
 
-        let res = self.http_client.get(object_metadata.parse::<Uri>()?).await?;
-        let body = res.into_body();
 
-        let mut byte_stream = body.flat_map(|chunk| {
-            futures::stream::iter(chunk.unwrap().to_vec())
-        });
+        let mut length_bytes = [0u8; 8];
+        body.read_exact(&mut length_bytes).await?;
+        let file_name_length = u64::from_be_bytes(length_bytes);
 
-        let bytes = byte_stream.by_ref().take(8).collect::<Vec<u8>>().await.try_into().unwrap();
+        let mut name_bytes = vec![0u8; file_name_length as usize];
+        body.read_exact(&mut name_bytes).await?;
+        let file_name = String::from_utf8(name_bytes)?;
 
-        let file_name_length: u64 = u64::from_be_bytes(bytes);
-        let name = byte_stream.by_ref().take(file_name_length as usize).collect::<Vec<u8>>().await.try_into().unwrap();
-        let file_name = String::from_utf8(name)?;
-
-        let chunks = byte_stream.chunks(1024).map(|chunk| {
-            Ok::<_, BoxError>(Bytes::from(chunk))
-        });
-
-        Ok((file_name, None, Body::wrap_stream(chunks)))
+        Ok((file_name, None, Body::wrap_stream(body.into_inner().map_ok(Vec::<u8>::from))))
     }
 }
 
