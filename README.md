@@ -43,7 +43,7 @@ as follows:
 ### <kbd>POST</kbd> <kbd>/upload</kbd>
 
 Upload a file to the server. The file is expected to be sent as the request
-body. The file name is expected to be sent as the `X-File-Name` header.
+body. The file name is expected to be sent as the `X-File-Name` header, URI-encoded as defined in [encodeURIComponent](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/encodeURIComponent). 
 
 If successful, the response status code will be `201 Created`, and the response body will contain the UUID of the uploaded file.
 
@@ -58,7 +58,7 @@ displaying a file name in a download dialog.
 ### <kbd>GET</kbd> <kbd>/download/:uuid</kbd>
 
 Download a file from the server. The file will be sent as the response body.
-The file name will be sent as the `X-File-Name` header.
+The file name will be sent as the `X-File-Name` header, URI-encoded as defined in [encodeURIComponent](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/encodeURIComponent).
 
 If successful, the response status code will be `200 OK`.
 

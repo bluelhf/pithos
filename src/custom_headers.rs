@@ -30,8 +30,8 @@ impl Header for XFileName {
         let value = values
             .next()
             .and_then(|value| value.to_str().ok())
+            .and_then(|value| urlencoding::decode(value).ok())
             .ok_or_else(headers::Error::invalid)?;
-
         Ok(XFileName(value.to_string()))
     }
 
@@ -39,7 +39,7 @@ impl Header for XFileName {
     where
         E: Extend<HeaderValue>,
     {
-        let value = HeaderValue::from_str(&self.0).unwrap();
+        let value = HeaderValue::from_str(&urlencoding::encode(&self.0)).unwrap();
 
         values.extend(std::iter::once(value));
     }
