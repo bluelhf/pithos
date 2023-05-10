@@ -94,10 +94,9 @@ fn cors_layer() -> CorsLayer {
 async fn upload_handler(
     State(model): State<&'static dyn Model>,
     TypedHeader(x_file_name): TypedHeader<XFileName>,
-    TypedHeader(content_length): TypedHeader<ContentLength>,
     body: BodyStream
 ) -> Result<(StatusCode, String), PilviError> {
-    model.write_file(&x_file_name.0, content_length.0, body).await
+    model.write_file(&x_file_name.0, None, body).await
         .map(|uuid| (StatusCode::CREATED, uuid.to_string()))
 }
 

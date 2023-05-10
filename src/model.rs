@@ -16,7 +16,7 @@ use crate::error::PilviError;
 
 #[async_trait]
 pub(crate) trait Model: Sync + Send {
-    async fn write_file(&self, file_name: &str, length: u64, file_content: BodyStream) -> Result<Uuid, PilviError>;
+    async fn write_file(&self, file_name: &str, length: Option<u64>, file_content: BodyStream) -> Result<Uuid, PilviError>;
     async fn read_file(&self, file_identifier: Uuid) -> Result<(String, Option<u64>, Body), PilviError>;
 }
 
@@ -40,7 +40,7 @@ impl GoogleCloudStorageModel {
 
 #[async_trait]
 impl Model for GoogleCloudStorageModel {
-    async fn write_file(&self, file_name: &str, content_length: u64, file_content: BodyStream) -> Result<Uuid, PilviError> {
+    async fn write_file(&self, file_name: &str, content_length: Option<u64>, file_content: BodyStream) -> Result<Uuid, PilviError> {
         let id = Uuid::new_v4();
 
         let file_name_bytes = Bytes::from(file_name.to_string());
@@ -54,7 +54,7 @@ impl Model for GoogleCloudStorageModel {
 
         self.client.object()
             .create_streamed(
-                &*self.bucket.name, stream, content_length + file_name_bytes.len() as u64 + 8,
+                &*self.bucket.name, stream, content_length.map(|l| l + file_name_bytes.len() as u64 + 8),
                 &id.to_string(), "application/octet-stream"
             ).await?;
 
@@ -109,7 +109,7 @@ impl LocalFilesystemModel {
 
 #[async_trait]
 impl Model for LocalFilesystemModel {
-    async fn write_file(&self, file_name: &str, _: u64, mut file_content: BodyStream) -> Result<Uuid, PilviError> {
+    async fn write_file(&self, file_name: &str, _: Option<u64>, mut file_content: BodyStream) -> Result<Uuid, PilviError> {
         self.try_create_storage().await?;
 
         let id = Uuid::new_v4();
