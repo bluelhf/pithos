@@ -10,8 +10,8 @@ lazy_static! {
 
 pub struct XFileNameHeaderName;
 
-impl Into<HeaderName> for XFileNameHeaderName {
-    fn into(self) -> HeaderName {
+impl From<XFileNameHeaderName> for HeaderName {
+    fn from(_: XFileNameHeaderName) -> HeaderName {
         INTERNAL_NAME.clone()
     }
 }
