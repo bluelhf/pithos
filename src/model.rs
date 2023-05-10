@@ -115,7 +115,7 @@ impl Model for LocalFilesystemModel {
         let mut file = File::create(&file_path).await?;
 
         file.write_u64(file_name.len() as u64).await?;
-        file.write(file_name.as_bytes()).await?;
+        file.write_all(file_name.as_bytes()).await?;
 
         while let Some(chunk) = file_content.next().await {
             file.write_all(&chunk?).await?;
