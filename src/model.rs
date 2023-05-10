@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::io;
 use std::io::ErrorKind;
 use async_trait::async_trait;
@@ -7,7 +6,7 @@ use std::io::ErrorKind::AlreadyExists;
 use std::path::PathBuf;
 use axum::extract::BodyStream;
 use bytes::Bytes;
-use futures::{StreamExt, TryStreamExt};
+use futures::{Stream, StreamExt};
 use hyper::Body;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -64,7 +63,7 @@ impl Model for GoogleCloudStorageModel {
         let mut body = StreamReader::new(self.client.object()
             .download_streamed(&self.bucket.name, &file_identifier.to_string())
             .await?.chunks(1024)
-            .map(|c| c.into_iter().collect::<Result<VecDeque<u8>, cloud_storage::Error>>())
+            .map(|c| c.into_iter().collect::<Result<Bytes, cloud_storage::Error>>())
             .map(|e| e.map_err(|err| {
                 io::Error::new(ErrorKind::Other, err)
             }))
@@ -73,13 +72,18 @@ impl Model for GoogleCloudStorageModel {
 
         let mut length_bytes = [0u8; 8];
         body.read_exact(&mut length_bytes).await?;
-        let file_name_length = u64::from_be_bytes(length_bytes);
+        let length = u64::from_be_bytes(length_bytes);
 
-        let mut name_bytes = vec![0u8; file_name_length as usize];
+        let mut name_bytes = vec![0u8; length as usize];
         body.read_exact(&mut name_bytes).await?;
         let file_name = String::from_utf8(name_bytes)?;
 
-        Ok((file_name, None, Body::wrap_stream(body.into_inner().map_ok(Vec::<u8>::from))))
+        let size_hint = body.get_mut().size_hint().1
+            .map(|s| s as u64 - length - 8);
+
+        let (inner, buffer) = body.into_inner_with_chunk();
+        let stream = futures::stream::iter(buffer.map(Ok)).chain(inner);
+        Ok((file_name, size_hint, Body::wrap_stream(stream)))
     }
 }
 
