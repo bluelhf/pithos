@@ -2,7 +2,6 @@
 #![feature(seek_stream_len)]
 #![feature(trivial_bounds)]
 #![feature(async_closure)]
-#![feature(return_position_impl_trait_in_trait)]
 #![feature(try_blocks)]
 
 extern crate core;
@@ -18,7 +17,7 @@ use axum::{http::{
     header::CONTENT_TYPE,
     method::Method,
     StatusCode,
-}, routing::{get, post}, extract::{BodyStream, Path, State}, Router, body::StreamBody, TypedHeader, headers};
+}, routing::{get, post}, extract::{BodyStream, Path, State}, Router, body::StreamBody, TypedHeader};
 use axum::http::HeaderName;
 use axum::http::header::CONTENT_LENGTH;
 use axum::response::{IntoResponse};
@@ -26,8 +25,6 @@ use axum::response::{IntoResponse};
 #[cfg(feature = "tls")] use axum_server::tls_rustls::RustlsConfig;
 #[cfg(feature = "tls")] use std::path::PathBuf;
 use axum::headers::HeaderMap;
-use headers::ContentLength;
-
 
 use tower_http::cors::{CorsLayer, Any};
 
@@ -58,7 +55,7 @@ async fn main() {
         .with_state(model);
 
     let port = std::env::var("PORT")
-        .map(|s| s.parse().expect(&format!("{s} is not a valid port")))
+        .map(|s| s.parse().unwrap_or_else(|_| panic!("{s} is not a valid port")))
         .unwrap_or_else(|_| 8080);
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -108,7 +105,7 @@ async fn download_handler(
     let (name, length, body) = model.read_file(uuid).await?;
 
     let mut map = HeaderMap::new();
-    map.insert::<HeaderName>(X_FILE_NAME.into(), name.clone().parse()?);
+    map.insert::<HeaderName>(X_FILE_NAME.into(), name.parse()?);
     if let Some(length) = length {
         map.insert(CONTENT_LENGTH, length.to_string().parse()?);
     }
