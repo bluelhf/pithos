@@ -11,6 +11,7 @@ mod model;
 mod error;
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use uuid::Uuid;
 
 use axum::{http::{
@@ -23,30 +24,34 @@ use axum::http::header::CONTENT_LENGTH;
 use axum::response::{IntoResponse};
 
 #[cfg(feature = "tls")] use axum_server::tls_rustls::RustlsConfig;
-#[cfg(feature = "tls")] use std::path::PathBuf;
 use axum::headers::HeaderMap;
 
 use tower_http::cors::{CorsLayer, Any};
+use tracing::info;
 
 use crate::{
     error::PilviError,
     custom_headers::{X_FILE_NAME, XFileName},
     model::Model,
 };
-use crate::model::GoogleCloudStorageModel;
+use crate::model::{GoogleCloudStorageModel, LocalFilesystemModel, SnailNoopModel};
 
 #[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 
-    let model = GoogleCloudStorageModel::with_bucket(
-        std::env::var("BUCKET_NAME").expect("BUCKET_NAME environment variable must be set"),
-        cloud_storage::Client::new(),
-    ).await.expect("failed to create GoogleCloudStorageModel");
-    //let model = LocalFilesystemModel::with_storage("files".into());
+    let model_choice = std::env::var("MODEL").unwrap_or("local".into());
+    let model: Box<dyn Model> = match model_choice.as_str() {
+        "gcs" => initialise_gcs_model().await,
+        "local" => initialise_local_model(),
+        "snail" => Box::new(SnailNoopModel::default()),
+        _ => panic!("MODEL environment variable must be 'gcs', 'local', or 'snail', but was '{model_choice}'"),
+    };
+
+    info!("Initialised {model} Model");
 
     // Model lives for the lifetime of the program — it is 'effectively static' so fine to leak
-    let model: &'static dyn Model = Box::leak(Box::new(model));
+    let model: &'static dyn Model = Box::leak(model);
 
     let app = Router::new()
         .route("/upload", post(upload_handler))
@@ -55,10 +60,12 @@ async fn main() {
         .with_state(model);
 
     let port = std::env::var("PORT")
-        .map(|s| s.parse().unwrap_or_else(|_| panic!("{s} is not a valid port")))
-        .unwrap_or_else(|_| 8080);
+        .map(|s| s.parse().unwrap_or_else(|_| panic!("'{s}' is not a valid port")))
+        .ok();
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port.unwrap_or(8080)));
+
+    info!("Listening on {addr}{change_suggest}", change_suggest = if let Some(_) = port { "" } else { " (change with the PORT environment variable)" });
 
     #[cfg(feature = "tls")]
     {
@@ -79,6 +86,25 @@ async fn main() {
     }
 }
 
+async fn initialise_gcs_model() -> Box<GoogleCloudStorageModel> {
+    let bucket_name = std::env::var("BUCKET_NAME").expect("BUCKET_NAME environment variable must be set");
+
+    Box::new(GoogleCloudStorageModel::with_bucket(
+        bucket_name,
+        cloud_storage::Client::new(),
+    ).await.expect("failed to create Google Cloud Storage Model"))
+}
+
+fn initialise_local_model() -> Box<LocalFilesystemModel> {
+    let path: PathBuf = std::env::var("STORAGE_PATH")
+        .unwrap_or("files".into())
+        .parse().expect("STORAGE_PATH must be a valid path");
+
+    Box::new(LocalFilesystemModel::with_storage(
+        path
+    ))
+}
+
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .expose_headers(vec![X_FILE_NAME.into(), CONTENT_LENGTH])
@@ -93,6 +119,7 @@ async fn upload_handler(
     TypedHeader(x_file_name): TypedHeader<XFileName>,
     body: BodyStream
 ) -> Result<(StatusCode, String), PilviError> {
+    info!("Receiving upload '{name}'", name = x_file_name.0);
     model.write_file(&x_file_name.0, None, body).await
         .map(|uuid| (StatusCode::CREATED, uuid.to_string()))
 }
@@ -103,6 +130,7 @@ async fn download_handler(
     Path(uuid): Path<Uuid>
 ) -> Result<(HeaderMap, impl IntoResponse), PilviError> {
     let (name, length, body) = model.read_file(uuid).await?;
+    info!("Receiving download request for '{name}'");
 
     let mut map = HeaderMap::new();
     map.insert::<HeaderName>(X_FILE_NAME.into(), name.parse()?);

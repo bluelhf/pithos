@@ -1,9 +1,11 @@
-use std::io;
+use std::{io, thread};
 use std::io::ErrorKind;
+use std::fmt::{Display, Formatter};
 use async_trait::async_trait;
 
 use std::io::ErrorKind::AlreadyExists;
 use std::path::PathBuf;
+use std::time::Duration;
 use axum::extract::BodyStream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -16,11 +18,10 @@ use crate::error::PilviError;
 
 
 #[async_trait]
-pub(crate) trait Model: Sync + Send {
+pub(crate) trait Model: Display + Sync + Send {
     async fn write_file(&self, file_name: &str, length: Option<u64>, file_content: BodyStream) -> Result<Uuid, PilviError>;
     async fn read_file(&self, file_identifier: Uuid) -> Result<(String, Option<u64>, Body), PilviError>;
 }
-
 
 pub struct GoogleCloudStorageModel {
     client: cloud_storage::Client,
@@ -33,6 +34,12 @@ impl GoogleCloudStorageModel {
             bucket: client.bucket().read(&bucket_name).await?,
             client,
         })
+    }
+}
+
+impl Display for GoogleCloudStorageModel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Google Cloud Storage")
     }
 }
 
@@ -108,6 +115,12 @@ impl LocalFilesystemModel {
     }
 }
 
+impl Display for LocalFilesystemModel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Local Filesystem")
+    }
+}
+
 #[async_trait]
 impl Model for LocalFilesystemModel {
     async fn write_file(&self, file_name: &str, _: Option<u64>, mut file_content: BodyStream) -> Result<Uuid, PilviError> {
@@ -140,5 +153,27 @@ impl Model for LocalFilesystemModel {
         let file_name = String::from_utf8(file_name)?;
 
         Ok((file_name, Some(file.metadata().await?.len() - 8 - length), Body::wrap_stream(ReaderStream::new(file))))
+    }
+}
+
+#[derive(Default)]
+pub struct SnailNoopModel;
+
+impl Display for SnailNoopModel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Snail Noop")
+    }
+}
+
+#[async_trait]
+impl Model for SnailNoopModel {
+    async fn write_file(&self, _: &str, _: Option<u64>, _: BodyStream) -> Result<Uuid, PilviError> {
+        thread::sleep(Duration::from_secs(30));
+        Ok(Uuid::new_v4())
+    }
+
+    async fn read_file(&self, _: Uuid) -> Result<(String, Option<u64>, Body), PilviError> {
+        thread::sleep(Duration::from_secs(30));
+        Ok((String::new(), None, Body::empty()))
     }
 }
