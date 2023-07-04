@@ -111,11 +111,8 @@ fn cors_layer() -> CorsLayer {
 /// Filters out requests from blocked IPs.
 async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClientIp(ip): SecureClientIp, request: Request<B>, next: Next<B>) -> Result<Response, PithosError> {
     if state.config.is_blocked(&ip) {
-        info!("Blocked request from {ip}");
         return Err(PithosError::Blocked);
     }
-
-    info!("Accepted request from {ip}");
 
     Ok(next.run(request).await)
 }
