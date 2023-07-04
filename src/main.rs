@@ -1,141 +1,147 @@
+//! Pithos is a simple file-sharing service.
 #![feature(async_fn_in_trait)]
 #![feature(seek_stream_len)]
 #![feature(trivial_bounds)]
 #![feature(async_closure)]
 #![feature(try_blocks)]
 
-extern crate core;
+#![warn(
+    clippy::all,
+    clippy::pedantic,
+    clippy::nursery,
+    clippy::cargo,
+)]
+#![allow(clippy::multiple_crate_versions)]
 
-mod custom_headers;
-mod model;
-mod error;
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+
+use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
+use axum::headers::ContentLength;
+use axum::http::Request;
+use axum::middleware::Next;
+use axum::response::Response;
+use axum_client_ip::SecureClientIp;
+use google_cloud_storage::client::{Client, ClientConfig};
+use tokio::fs;
+use tower::ServiceBuilder;
+use tower_http::cors::{Any, CorsLayer};
+use tracing::info;
 use uuid::Uuid;
 
-use axum::{http::{
-    header::CONTENT_TYPE,
-    method::Method,
-    StatusCode,
-}, routing::{get, post}, extract::{BodyStream, Path, State}, Router, body::StreamBody, TypedHeader};
-use axum::http::HeaderName;
-use axum::http::header::CONTENT_LENGTH;
-use axum::response::{IntoResponse};
+use crate::config::Config;
+use crate::errors::PithosError;
+use crate::service::{DownloadHandle, GoogleCloudStorage, Service, UploadHandle};
 
-#[cfg(feature = "tls")] use axum_server::tls_rustls::RustlsConfig;
-use axum::headers::HeaderMap;
+mod errors;
+mod service;
+mod config;
 
-use tower_http::cors::{CorsLayer, Any};
-use tracing::info;
-
-use crate::{
-    error::PilviError,
-    custom_headers::{X_FILE_NAME, XFileName},
-    model::Model,
-};
-use crate::model::{GoogleCloudStorageModel, LocalFilesystemModel, SnailNoopModel};
+/// Represents the state of the application at any given time.
+struct AppState {
+    /// The service used to generate URLs for accessing files
+    service: Box<dyn Service>,
+    /// The configuration of the application
+    config: Config,
+}
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
-    let model_choice = std::env::var("MODEL").unwrap_or("local".into());
-    let model: Box<dyn Model> = match model_choice.as_str() {
-        "gcs" => initialise_gcs_model().await,
-        "local" => initialise_local_model(),
-        "snail" => Box::new(SnailNoopModel::default()),
-        _ => panic!("MODEL environment variable must be 'gcs', 'local', or 'snail', but was '{model_choice}'"),
-    };
-
-    info!("Initialised {model} Model");
-
-    // Model lives for the lifetime of the program — it is 'effectively static' so fine to leak
-    let model: &'static dyn Model = Box::leak(model);
+    // app state lives for the lifetime of the program — it is 'effectively static' so fine to leak
+    let state: &'static AppState = Box::leak(Box::new(AppState {
+        service: initialise_gcs_service().await?,
+        config: initialise_config().await?,
+    }));
 
     let app = Router::new()
-        .route("/upload", post(upload_handler))
+        .route("/upload", get(upload_handler))
         .route("/download/:uuid", get(download_handler))
-        .layer(cors_layer())
-        .with_state(model);
+        .layer(ServiceBuilder::new()
+            .layer(state.config.get_ip_source().into_extension())
+            .layer(middleware::from_fn_with_state(state, filter_ips))
+            .layer(cors_layer()))
+        .with_state(state);
 
-    let port = std::env::var("PORT")
-        .map(|s| s.parse().unwrap_or_else(|_| panic!("'{s}' is not a valid port")))
-        .ok();
+    let port = match std::env::var("PORT") {
+        Ok(port_choice) => Some(port_choice.parse::<u16>()?),
+        Err(_) => None,
+    };
 
     let addr = SocketAddr::from(([0, 0, 0, 0], port.unwrap_or(8080)));
 
-    info!("Listening on {addr}{change_suggest}", change_suggest = if let Some(_) = port { "" } else { " (change with the PORT environment variable)" });
+    info!("Listening on {addr}{change_suggest}", change_suggest = if port.is_some() { "" } else { " (change with the PORT environment variable)" });
 
-    #[cfg(feature = "tls")]
-    {
-        let config = RustlsConfig::from_pem_file(
-            ["tls", "cert.pem"].iter().collect::<PathBuf>(),
-            ["tls", "key.pem"].iter().collect::<PathBuf>()
-        ).await.expect("tls/cert.pem and tls/key.pem should contain relevant tls certificate data");
 
-        axum_server::bind_rustls(addr, config)
-            .serve(app.into_make_service())
-            .await.expect("failed to bind to socket — is something else already there?");
-    }
-    #[cfg(not(feature = "tls"))]
-    {
-        axum_server::bind(addr)
-            .serve(app.into_make_service())
-            .await.expect("failed to bind to socket — is something else already there?");
-    }
+    Ok(axum_server::bind(addr)
+        .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+        .await?)
 }
 
-async fn initialise_gcs_model() -> Box<GoogleCloudStorageModel> {
-    let bucket_name = std::env::var("BUCKET_NAME").expect("BUCKET_NAME environment variable must be set");
+/// Parses the `Config.toml` file and returns a `Config` struct.
+async fn initialise_config() -> Result<Config, Box<dyn std::error::Error>> {
+    let config_text = fs::read_to_string("Config.toml").await?;
+    Ok(toml::from_str(&config_text)?)
+}
 
-    Box::new(GoogleCloudStorageModel::with_bucket(
+/// Initialises the Google Cloud Storage Service, using the `GOOGLE_CLOUD_BUCKET` and `GOOGLE_APPLICATION_CREDENTIALS` environment variables.
+async fn initialise_gcs_service() -> Result<Box<GoogleCloudStorage>, Box<dyn std::error::Error>> {
+    let bucket_name = std::env::var("GOOGLE_CLOUD_BUCKET")?;
+
+    let service = Box::new(GoogleCloudStorage::with_bucket(
         bucket_name,
-        cloud_storage::Client::new(),
-    ).await.expect("failed to create Google Cloud Storage Model"))
+        Client::new(ClientConfig::default().with_auth().await?),
+    ));
+
+    info!("Initialised {service} Service");
+
+    Ok(service)
 }
 
-fn initialise_local_model() -> Box<LocalFilesystemModel> {
-    let path: PathBuf = std::env::var("STORAGE_PATH")
-        .unwrap_or("files".into())
-        .parse().expect("STORAGE_PATH must be a valid path");
-
-    Box::new(LocalFilesystemModel::with_storage(
-        path
-    ))
-}
-
+/// Configures CORS for the application.
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .expose_headers(vec![X_FILE_NAME.into(), CONTENT_LENGTH])
-        .allow_headers(vec![X_FILE_NAME.into(), CONTENT_TYPE])
-        .allow_methods([Method::HEAD, Method::GET, Method::POST])
+        .allow_methods([Method::HEAD, Method::GET])
         .allow_origin(Any)
 }
 
-#[axum::debug_handler]
-async fn upload_handler(
-    State(model): State<&'static dyn Model>,
-    TypedHeader(x_file_name): TypedHeader<XFileName>,
-    body: BodyStream
-) -> Result<(StatusCode, String), PilviError> {
-    info!("Receiving upload '{name}'", name = x_file_name.0);
-    model.write_file(&x_file_name.0, None, body).await
-        .map(|uuid| (StatusCode::CREATED, uuid.to_string()))
+/// Filters out requests from blocked IPs.
+async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClientIp(ip): SecureClientIp, request: Request<B>, next: Next<B>) -> Result<Response, PithosError> {
+    if state.config.is_blocked(&ip) {
+        info!("Blocked request from {ip}");
+        return Err(PithosError::Blocked);
+    }
+
+    info!("Accepted request from {ip}");
+
+    Ok(next.run(request).await)
 }
 
+/// Handles requests to upload a file, redirecting them to the service.
+#[axum::debug_handler]
+async fn upload_handler(
+    State(state): State<&'static AppState>,
+    SecureClientIp(ip): SecureClientIp,
+    TypedHeader(content_length): TypedHeader<ContentLength>,
+) -> Result<(StatusCode, Json<UploadHandle>), PithosError> {
+    let AppState { config, service } = state;
+
+    if (content_length.0) > config.max_upload_size() {
+        return Err(PithosError::TooLarge(content_length.0, config.max_upload_size()));
+    }
+
+    service.request_upload_url(ip, content_length.0).await
+        .map(|handle| (StatusCode::CREATED, Json(handle)))
+}
+
+/// Handles requests to download a file, redirecting them to the service.
 #[axum::debug_handler]
 async fn download_handler(
-    State(model): State<&'static dyn Model>,
-    Path(uuid): Path<Uuid>
-) -> Result<(HeaderMap, impl IntoResponse), PilviError> {
-    let (name, length, body) = model.read_file(uuid).await?;
-    info!("Receiving download request for '{name}'");
-
-    let mut map = HeaderMap::new();
-    map.insert::<HeaderName>(X_FILE_NAME.into(), name.parse()?);
-    if let Some(length) = length {
-        map.insert(CONTENT_LENGTH, length.to_string().parse()?);
-    }
-    Ok((map, StreamBody::new(body)))
+    State(state): State<&'static AppState>,
+    SecureClientIp(ip): SecureClientIp,
+    Path(uuid): Path<Uuid>,
+) -> Result<Json<DownloadHandle>, PithosError> {
+    let handle = state.service.request_download_url(ip, uuid).await?;
+    Ok(Json(handle))
 }

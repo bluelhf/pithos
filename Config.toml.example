@@ -1,0 +1,23 @@
+[server]
+# The source to use for the client's IP address. Valid options are:
+#   1. RightmostForwarded - The rightmost IP from the `Forwarded` header
+#   2. RightmostXForwardedFor - The rightmost IP from the `X-Forwarded-For` header
+#   3. XRealIp - The IP from the `X-Real-Ip` header
+#   4. FlyClientIp - The IP from the `Fly-Client-IP` header
+#   5. TrueClientIp - The IP from the `True-Client-IP` header
+#   6. CfConnectingIp - The IP from the `CF-Connecting-IP` header
+#   7. ConnectInfo - The IP from the TCP connection
+
+# If Pithos is placed behind a reverse proxy, you should configure
+# the proxy to use one of the headers above and set this option accordingly.
+# If you are not using a reverse proxy, you should leave this option as-is.
+ip_source = "ConnectInfo"
+
+[files]
+# The maximum size of a file that can be uploaded. This value is in bytes.
+max_upload_size = 214748364800 # 200 GiB
+
+[ip_blacklist]
+# A list of IP addresses that are not allowed to upload files.
+# Both IPv4 and IPv6 addresses are supported.
+blocked_ips = []
