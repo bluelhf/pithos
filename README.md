@@ -22,7 +22,19 @@ front-end repository.
 3. Configure the following environment variables:
     - `GOOGLE_APPLICATION_CREDENTIALS` - The path to your GCS credentials JSON file
     - `GOOGLE_CLOUD_BUCKET` - The name of your GCS bucket
-4. Run `cargo run --release`
+4. Configure your GCS bucket with the following CORS policy:
+    ```json
+    [
+        {
+            "origin": ["*"],
+            "method": ["PUT", "GET"],
+            "responseHeader": ["Content-Type"]
+        }
+    ]
+    ```
+   > **Note**  
+   > To do this, follow the instructions on [Google Cloud's Documentation](https://cloud.google.com/storage/docs/configuring-cors).
+5. Run `cargo run --release`
 
 ## Usage for REST clients
 
@@ -32,7 +44,7 @@ front-end repository.
 
 ### Uploading a file
 
-1. Make a `GET` request to `/upload` with the `Content-Length` header set to the size of the file.
+1. Make a `GET` request to `/upload` with the `X-File-Size` header set to the size of the file.
 2. The server will respond with a JSON object containing a `url` and a `uuid`.
 3. Upload the file to the `url` using the `PUT` method.
 4. The server will respond with a <kbd>200 OK</kbd> status code if the upload was successful.
@@ -47,9 +59,9 @@ front-end repository.
 
 ### `GET /upload`
 
-| Header           | Description                            | Required |
-|------------------|----------------------------------------|----------|
-| `Content-Length` | The length of the file to be uploaded. | Yes      |
+| Header        | Description                                    | Required |
+|---------------|------------------------------------------------|----------|
+| `X-File-Size` | The size of the file to be uploaded, in bytes. | Yes      |
 
 Returns an [Upload Success](#upload-success) object. The client should then upload
 the file to the URL specified by the object using the `PUT` method.
