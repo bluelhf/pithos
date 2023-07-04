@@ -17,7 +17,6 @@
 use std::net::SocketAddr;
 
 use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
-use axum::headers::ContentLength;
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
@@ -30,12 +29,14 @@ use tracing::info;
 use uuid::Uuid;
 
 use crate::config::Config;
+use crate::custom_headers::{X_FILE_SIZE, XFileSize};
 use crate::errors::PithosError;
 use crate::service::{DownloadHandle, GoogleCloudStorage, Service, UploadHandle};
 
 mod errors;
 mod service;
 mod config;
+mod custom_headers;
 
 /// Represents the state of the application at any given time.
 struct AppState {
@@ -103,6 +104,7 @@ async fn initialise_gcs_service() -> Result<Box<GoogleCloudStorage>, Box<dyn std
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_methods([Method::HEAD, Method::GET])
+        .allow_headers(vec![X_FILE_SIZE.into()])
         .allow_origin(Any)
 }
 
@@ -123,15 +125,15 @@ async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClien
 async fn upload_handler(
     State(state): State<&'static AppState>,
     SecureClientIp(ip): SecureClientIp,
-    TypedHeader(content_length): TypedHeader<ContentLength>,
+    TypedHeader(file_size): TypedHeader<XFileSize>,
 ) -> Result<(StatusCode, Json<UploadHandle>), PithosError> {
     let AppState { config, service } = state;
 
-    if (content_length.0) > config.max_upload_size() {
-        return Err(PithosError::TooLarge(content_length.0, config.max_upload_size()));
+    if (file_size.0) > config.max_upload_size() {
+        return Err(PithosError::TooLarge(file_size.0, config.max_upload_size()));
     }
 
-    service.request_upload_url(ip, content_length.0).await
+    service.request_upload_url(ip, file_size.0).await
         .map(|handle| (StatusCode::CREATED, Json(handle)))
 }
 
