@@ -28,7 +28,7 @@ impl Config {
 
     /// Returns the client IP source.
     pub(crate) fn get_ip_source(&self) -> SecureClientIpSource {
-        self.server.ip_source
+        self.server.ip_source.clone()
     }
 }
 
