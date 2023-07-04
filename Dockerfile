@@ -15,6 +15,5 @@ RUN cargo build --release --bin pithos
 FROM debian:buster-slim AS runtime
 WORKDIR pithos
 COPY --from=builder /app/target/release/pithos /usr/local/bin
-COPY --from=builder /app/tls/ ./tls/
-RUN apt-get update && apt-get install -y ca-certificates && update-ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/Config.toml.example ./Config.toml
 ENTRYPOINT ["/usr/local/bin/pithos"]
