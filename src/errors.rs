@@ -13,12 +13,16 @@ use tracing::error;
 /// Errors that can happen when handling requests to Pithos.
 #[derive(Debug)]
 pub enum PithosError {
-    /// A Google Cloud Storage error occurred while trying to create a signed URL.
-    Access(SignedURLError),
+    /// An error occurred while trying to create a signed URL.
+    Access(Box<dyn Error>),
     /// The file that the user wants to upload is larger than the configured maximum upload size.
     TooLarge(u64, u64),
     /// The user is blocked from using this service, i.e. their IP is on the blacklist.
     Blocked,
+    /// The request succeeded, but an internal error occurred when attempting to write the file.
+    ServerError(Box<dyn Error>),
+    /// The local file being requested doesn't exist.
+    NoSuchFile
 }
 
 impl PithosError {
@@ -27,7 +31,8 @@ impl PithosError {
         match self {
             Self::TooLarge(_, _) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Blocked => StatusCode::FORBIDDEN,
-            Self::Access(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Access(_) | Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::NoSuchFile => StatusCode::NOT_FOUND
         }
     }
 }
@@ -38,6 +43,8 @@ impl Display for PithosError {
             Self::TooLarge(given, max) => { write!(f, "The file you tried to upload was too large. The maximum file size is {max} bytes, but you tried to upload {given} bytes.") }
             Self::Blocked => { write!(f, "You are blocked from using this service.") }
             Self::Access(_) => { write!(f, "The server failed to create an access URL") }
+            Self::ServerError(_) => { write!(f, "The storage server failed to store the file.") }
+            Self::NoSuchFile => { write!(f, "The file being requested doesn't exist. ") }
         }
     }
 }
@@ -45,15 +52,15 @@ impl Display for PithosError {
 impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TooLarge(_, _) | Self::Blocked => None,
-            Self::Access(e) => Some(e),
+            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile => None,
+            Self::Access(e) | Self::ServerError(e) => Some(&**e),
         }
     }
 }
 
 impl From<SignedURLError> for PithosError {
     fn from(e: SignedURLError) -> Self {
-        Self::Access(e)
+        Self::Access(Box::new(e))
     }
 }
 

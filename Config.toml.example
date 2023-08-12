@@ -1,3 +1,19 @@
+# Along with access management, Pithos also supports storing files locally using the `local` service.
+# In this case, uploads will go to the path designated by `local_storage_path`.
+local_storage_path = "local_uploads"
+
+# Pithos supports `LocalStorage` for local storage as well as `GoogleCloudStorage` for GCS.
+service = "LocalStorage"
+
+[services]
+
+[services.google_cloud_storage]
+bucket = "pithos-files"
+
+[files]
+# The maximum size of a file that can be uploaded. This value is in bytes.
+max_upload_size = 214748364800 # 200 GiB
+
 [server]
 # The source to use for the client's IP address. Valid options are:
 #   1. RightmostForwarded - The rightmost IP from the `Forwarded` header
@@ -12,10 +28,6 @@
 # the proxy to use one of the headers above and set this option accordingly.
 # If you are not using a reverse proxy, you should leave this option as-is.
 ip_source = "ConnectInfo"
-
-[files]
-# The maximum size of a file that can be uploaded. This value is in bytes.
-max_upload_size = 214748364800 # 200 GiB
 
 [ip_blacklist]
 # A list of IP addresses that are not allowed to upload files.

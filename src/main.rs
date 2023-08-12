@@ -14,15 +14,19 @@
 #![allow(clippy::multiple_crate_versions)]
 
 
+use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 
 use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
+use axum::extract::{BodyStream, Host};
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
+use axum::routing::put;
 use axum_client_ip::SecureClientIp;
+use axum_signed_urls::SignedUrl;
+use futures::TryStreamExt;
 use google_cloud_storage::client::{Client, ClientConfig};
-use tokio::fs;
 use tower::ServiceBuilder;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
@@ -31,7 +35,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::custom_headers::{X_FILE_SIZE, XFileSize};
 use crate::errors::PithosError;
-use crate::service::{DownloadHandle, GoogleCloudStorage, Service, UploadHandle};
+use crate::service::{AvailableService, DownloadHandle, GoogleCloudStorage, LocalStorage, RequestContext, Service, UploadHandle};
 
 mod errors;
 mod service;
@@ -49,16 +53,25 @@ struct AppState {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+    let _ = dotenv::dotenv();
+
+    let config = initialise_config().await?;
+
+    let service: Box<dyn Service> = match config.chosen_service() {
+        AvailableService::LocalStorage => { Box::new(LocalStorage::new("/signed_upload", "/signed_download")) }
+        AvailableService::GoogleCloudStorage => { Box::new(initialise_gcs_service(&config).await?) }
+    };
+
+    info!("Initialised {service} Service");
 
     // app state lives for the lifetime of the program — it is 'effectively static' so fine to leak
-    let state: &'static AppState = Box::leak(Box::new(AppState {
-        service: initialise_gcs_service().await?,
-        config: initialise_config().await?,
-    }));
+    let state: &'static AppState = Box::leak(Box::new(AppState { service, config }));
 
     let app = Router::new()
         .route("/upload", get(upload_handler))
         .route("/download/:uuid", get(download_handler))
+        .route("/signed_upload/:uuid", put(signed_upload_handler))
+        .route("/signed_download/:uuid", get(signed_download_handler))
         .layer(ServiceBuilder::new()
             .layer(state.config.get_ip_source().into_extension())
             .layer(middleware::from_fn_with_state(state, filter_ips))
@@ -82,20 +95,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Parses the `Config.toml` file and returns a `Config` struct.
 async fn initialise_config() -> Result<Config, Box<dyn std::error::Error>> {
+    use tokio::fs;
     let config_text = fs::read_to_string("Config.toml").await?;
     Ok(toml::from_str(&config_text)?)
 }
 
-/// Initialises the Google Cloud Storage Service, using the `GOOGLE_CLOUD_BUCKET` and `GOOGLE_APPLICATION_CREDENTIALS` environment variables.
-async fn initialise_gcs_service() -> Result<Box<GoogleCloudStorage>, Box<dyn std::error::Error>> {
-    let bucket_name = std::env::var("GOOGLE_CLOUD_BUCKET")?;
+/// Initialises the Google Cloud Storage Service, using the `GOOGLE_APPLICATION_CREDENTIALS` or `GOOGLE_APPLICATION_CREDENTIALS_JSON` environment variables.
+async fn initialise_gcs_service(config: &Config) -> Result<GoogleCloudStorage, Box<dyn std::error::Error>> {
+    let gcs_config = config.gcs_config();
 
-    let service = Box::new(GoogleCloudStorage::with_bucket(
-        bucket_name,
-        Client::new(ClientConfig::default().with_auth().await?),
-    ));
-
-    info!("Initialised {service} Service");
+    let service = GoogleCloudStorage::with_bucket(gcs_config.bucket_name(),
+        Client::new(ClientConfig::default().with_auth().await?));
 
     Ok(service)
 }
@@ -103,7 +113,7 @@ async fn initialise_gcs_service() -> Result<Box<GoogleCloudStorage>, Box<dyn std
 /// Configures CORS for the application.
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
-        .allow_methods([Method::HEAD, Method::GET])
+        .allow_methods([Method::HEAD, Method::GET, Method::PUT])
         .allow_headers(vec![X_FILE_SIZE.into()])
         .allow_origin(Any)
 }
@@ -123,6 +133,7 @@ async fn upload_handler(
     State(state): State<&'static AppState>,
     SecureClientIp(ip): SecureClientIp,
     TypedHeader(file_size): TypedHeader<XFileSize>,
+    Host(location): Host,
 ) -> Result<(StatusCode, Json<UploadHandle>), PithosError> {
     let AppState { config, service } = state;
 
@@ -130,7 +141,7 @@ async fn upload_handler(
         return Err(PithosError::TooLarge(file_size.0, config.max_upload_size()));
     }
 
-    service.request_upload_url(ip, file_size.0).await
+    service.request_upload_url(RequestContext { ip, location }, file_size.0).await
         .map(|handle| (StatusCode::CREATED, Json(handle)))
 }
 
@@ -139,8 +150,64 @@ async fn upload_handler(
 async fn download_handler(
     State(state): State<&'static AppState>,
     SecureClientIp(ip): SecureClientIp,
+    Host(location): Host,
     Path(uuid): Path<Uuid>,
 ) -> Result<Json<DownloadHandle>, PithosError> {
-    let handle = state.service.request_download_url(ip, uuid).await?;
+    let handle = state.service.request_download_url(RequestContext { ip, location }, uuid).await?;
     Ok(Json(handle))
+}
+
+/// Handles requests to upload a file to the local Pithos storage.
+#[axum::debug_handler]
+async fn signed_upload_handler(
+    State(state): State<&'static AppState>,
+    _: SignedUrl,
+    Path(uuid): Path<Uuid>,
+    body: BodyStream
+) -> Result<StatusCode, PithosError> {
+    use tokio::fs;
+    use tokio_util::io::StreamReader;
+
+    let AppState { config, .. } = state;
+
+    let path = config.local_storage_path();
+    match fs::create_dir_all(&path).await {
+        Err(err) if err.kind() == ErrorKind::AlreadyExists => (),
+        r => r.map_err(|e| PithosError::ServerError(Box::new(e)))?
+    }
+
+    let mut file = File::create(path.join(uuid.to_string())).await
+        .map_err(|e| PithosError::ServerError(Box::new(e)))?;
+
+    let body_with_io_error = body.map_err(|err| Error::new(ErrorKind::Other, err));
+    let mut body_reader = StreamReader::new(body_with_io_error);
+    tokio::io::copy_buf(&mut body_reader, &mut file).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
+
+    Ok(StatusCode::ACCEPTED)
+}
+
+use axum::body::StreamBody;
+use tokio_util::io::ReaderStream;
+use tokio::fs::File;
+
+/// Handles requests to download a file from the local Pithos storage.
+#[axum::debug_handler]
+async fn signed_download_handler(
+    State(state): State<&'static AppState>,
+    _: SignedUrl,
+    Path(uuid): Path<Uuid>,
+) -> Result<(StatusCode, StreamBody<ReaderStream<File>>), PithosError> {
+    let AppState { config, .. } = state;
+
+    let path = config.local_storage_path();
+
+    let file = File::open(path.join(uuid.to_string())).await
+        .map_err(|e| match e.kind() {
+            ErrorKind::NotFound => PithosError::NoSuchFile,
+            _ => PithosError::ServerError(Box::new(e))
+        })?;
+
+    let reader_stream = ReaderStream::new(file);
+    let body = StreamBody::new(reader_stream);
+    Ok((StatusCode::OK, body))
 }
