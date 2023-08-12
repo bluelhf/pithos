@@ -19,7 +19,7 @@ use std::net::SocketAddr;
 
 use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
 use axum::extract::{BodyStream, Host};
-use axum::http::Request;
+use axum::http::{HeaderMap, HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
 use axum::routing::put;
@@ -196,7 +196,7 @@ async fn signed_download_handler(
     State(state): State<&'static AppState>,
     _: SignedUrl,
     Path(uuid): Path<Uuid>,
-) -> Result<(StatusCode, StreamBody<ReaderStream<File>>), PithosError> {
+) -> Result<(StatusCode, HeaderMap, StreamBody<ReaderStream<File>>), PithosError> {
     let AppState { config, .. } = state;
 
     let path = config.local_storage_path();
@@ -207,7 +207,12 @@ async fn signed_download_handler(
             _ => PithosError::ServerError(Box::new(e))
         })?;
 
+    let size = file.metadata().await.map_err(|e| PithosError::ServerError(Box::new(e)))?.len();
+
     let reader_stream = ReaderStream::new(file);
     let body = StreamBody::new(reader_stream);
-    Ok((StatusCode::OK, body))
+
+    let mut headers = HeaderMap::new();
+    headers.insert("Content-Length", HeaderValue::from(size));
+    Ok((StatusCode::OK, headers, body))
 }
