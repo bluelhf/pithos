@@ -118,7 +118,7 @@ async fn initialise_gcs_service(config: &Config) -> Result<GoogleCloudStorage, B
 fn cors_layer() -> CorsLayer {
     CorsLayer::new()
         .allow_methods([Method::HEAD, Method::GET, Method::PUT])
-        .allow_headers(vec![X_FILE_SIZE.into()])
+        .allow_headers(vec![X_FILE_SIZE.into(), CONTENT_TYPE])
         .allow_origin(Any)
 }
 
@@ -195,6 +195,7 @@ async fn signed_upload_handler(
 }
 
 use axum::body::StreamBody;
+use hyper::header::CONTENT_TYPE;
 use serde::Deserialize;
 use tokio_util::io::ReaderStream;
 use tokio::fs::File;
