@@ -18,11 +18,31 @@ front-end repository.
 ### Setup
 
 1. Clone this repository
-2. Copy `Config.toml.example` to `Config.toml` or provide your own
-3. Configure the following environment variables:
-    - `GOOGLE_APPLICATION_CREDENTIALS` - The path to your GCS credentials JSON file
-    - `GOOGLE_CLOUD_BUCKET` - The name of your GCS bucket
-4. Configure your GCS bucket with the following CORS policy:
+2. Configure as explained in [Configuration](#configuration).
+3. Run Pithos with `cargo run --release`
+
+## Configuration
+
+### Configuring Pithos for Local Storage
+
+In addition to managing access to other storage providers, Pithos can act as its own
+storage provider.
+
+1. In `Config.toml`:
+   1. Set `service` to `LocalStorage`
+   2. Set `local_storage_path` to the desired path for file uploads.
+2. Configure the following environment variables in `.env`:
+   - `AXUM_SECRET` - A custom, highly random string to use as a secret for signing URLs.
+
+### Configuring Pithos for Google Cloud Storage
+
+1. In `Config.toml`:
+   1. Set `service` to `GoogleCloudStorage`.
+   2. Set `services.google_cloud_storage.bucket` to the name of your GCS bucket.
+2. In `.env`, add either
+    - `GOOGLE_APPLICATION_CREDENTIALS` - The path to your GCS credentials JSON file, or
+    - `GOOGLE_APPLICATION_CREDENTIALS_JSON` - The JSON content directly.
+3. Configure your GCS bucket with the following CORS policy:
     ```json
     [
         {
@@ -34,26 +54,27 @@ front-end repository.
     ```
    > **Note**  
    > To do this, follow the instructions on [Google Cloud's Documentation](https://cloud.google.com/storage/docs/configuring-cors).
-5. Run `cargo run --release`
 
 ## Usage for REST clients
 
 > **Note**  
 > It is possible and recommended to encrypt the data before uploading it to Pithos.
-> Files are stored in plain form on Google's servers by default.
+> Files are stored in plaintext form on the storage provider's server by default.
 
 ### Uploading a file
 
 1. Make a `GET` request to `/upload` with the `X-File-Size` header set to the size of the file.
 2. The server will respond with a JSON object containing a `url` and a `uuid`.
-3. Upload the file to the `url` using the `PUT` method.
-4. The server will respond with a <kbd>200 OK</kbd> status code if the upload was successful.
+3. Resolve the possibly relative `url` with respect to the original API base URL.
+4. Upload the file to the resolved `url` using the `PUT` method.
+5. The server will respond with a <kbd>202 ACCEPTED</kbd> status code if the upload was successful.
 
 ### Downloading a file
 
 1. Make a `GET` request to `/download/:uuid`, where `:uuid` is the UUID of the file you got from the upload step.
 2. The server will respond with a JSON object containing a `url`.
-3. Download the file from the `url` using the `GET` method.
+3. Resolve the possibly relative `url` with respect to the original API base URL.
+4. Download the file from the `url` using the `GET` method.
 
 ## API Reference
 
@@ -63,16 +84,16 @@ front-end repository.
 |---------------|------------------------------------------------|----------|
 | `X-File-Size` | The size of the file to be uploaded, in bytes. | Yes      |
 
-Returns an [Upload Success](#upload-success) object. The client should then upload
-the file to the URL specified by the object using the `PUT` method.
+Returns an [Upload Success](#upload-success) object. The client should then resolve
+the URL if it is relative, and upload the file to the resolved URL using the `PUT` method.
 
 ### `GET /download/:uuid`
 
-Returns a [Download Success](#download-success) object. The client should then download
-the file from the URL specified by the object using the `GET` method.
+Returns a [Download Success](#download-success) object. The client should then resolve
+the URL if it is relative, and download the file from the resolved URL using the `GET` method.
 
-If the file does not exist, this endpoint will still succeed, but the URL returned
-by the object will respond with a <kbd>404 Not Found</kbd> error.
+If the file does not exist, this endpoint will still succeed, but the request to the
+resolved URL will respond with a <kbd>404 Not Found</kbd> error.
 
 ## Object Reference
 
@@ -80,16 +101,16 @@ All API responses are JSON objects.
 
 ### Upload Success
 
-| Key    | Type   | Description                                   |
-|--------|--------|-----------------------------------------------|
-| `url`  | String | The URL to which the file should be uploaded. |
-| `uuid` | String | The UUID of the file, for downloading later.  |
+| Key    | Type   | Description                                                       |
+|--------|--------|-------------------------------------------------------------------|
+| `url`  | String | The (possibly relative) URL to which the file should be uploaded. |
+| `uuid` | String | The UUID of the file, for downloading later.                      |
 
 ### Download Success
 
-| Key    | Type   | Description                                    |
-|--------|--------|------------------------------------------------|
-| `url`  | String | The URL from which the file can be downloaded. |
+| Key   | Type   | Description                                                        |
+|-------|--------|--------------------------------------------------------------------|
+| `url` | String | The (possibly relative) URL from which the file can be downloaded. |
 
 ## Errors
 
@@ -102,7 +123,7 @@ Sent when the server encounters an error while trying to generate the Access URL
 
 ### File Too Large <kbd>413 Payload Too Large</kbd>
 Sent when the file is larger than the configured maximum file size. The maximum file size
-is 200 GiB by default, and can be configured in `Config.toml`
+is 200 GiB by default.
 
 ### Blocked <kbd>403 Forbidden</kbd>
 Sent when the client is not allowed to use this service, i.e. if they have been
