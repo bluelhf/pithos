@@ -17,8 +17,10 @@
 use std::io::{Error, ErrorKind};
 use std::net::SocketAddr;
 
+use serde_with::{serde_as, DisplayFromStr};
+
 use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
-use axum::extract::{BodyStream, Host};
+use axum::extract::{BodyStream, Query};
 use axum::http::{HeaderMap, HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -32,10 +34,12 @@ use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 use uuid::Uuid;
 
+use mime::Mime;
+
 use crate::config::Config;
 use crate::custom_headers::{X_FILE_SIZE, XFileSize};
 use crate::errors::PithosError;
-use crate::service::{AvailableService, DownloadHandle, GoogleCloudStorage, LocalStorage, RequestContext, Service, UploadHandle};
+use crate::service::{AvailableService, DownloadHandle, GoogleCloudStorage, LocalStorage, Service, UploadHandle};
 
 mod errors;
 mod service;
@@ -131,9 +135,7 @@ async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClien
 #[axum::debug_handler]
 async fn upload_handler(
     State(state): State<&'static AppState>,
-    SecureClientIp(ip): SecureClientIp,
     TypedHeader(file_size): TypedHeader<XFileSize>,
-    Host(location): Host,
 ) -> Result<(StatusCode, Json<UploadHandle>), PithosError> {
     let AppState { config, service } = state;
 
@@ -141,19 +143,25 @@ async fn upload_handler(
         return Err(PithosError::TooLarge(file_size.0, config.max_upload_size()));
     }
 
-    service.request_upload_url(RequestContext { ip, location }, file_size.0).await
+    service.request_upload_url(file_size.0).await
         .map(|handle| (StatusCode::CREATED, Json(handle)))
+}
+
+#[serde_as]
+#[derive(Deserialize)]
+pub struct DownloadQuery {
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    type_hint: Option<Mime>,
 }
 
 /// Handles requests to download a file, redirecting them to the service.
 #[axum::debug_handler]
 async fn download_handler(
     State(state): State<&'static AppState>,
-    SecureClientIp(ip): SecureClientIp,
-    Host(location): Host,
     Path(uuid): Path<Uuid>,
+    Query(options): Query<DownloadQuery>
 ) -> Result<Json<DownloadHandle>, PithosError> {
-    let handle = state.service.request_download_url(RequestContext { ip, location }, uuid).await?;
+    let handle = state.service.request_download_url(options.type_hint, uuid).await?;
     Ok(Json(handle))
 }
 
@@ -187,6 +195,7 @@ async fn signed_upload_handler(
 }
 
 use axum::body::StreamBody;
+use serde::Deserialize;
 use tokio_util::io::ReaderStream;
 use tokio::fs::File;
 
@@ -196,6 +205,7 @@ async fn signed_download_handler(
     State(state): State<&'static AppState>,
     _: SignedUrl,
     Path(uuid): Path<Uuid>,
+    Query(options): Query<DownloadQuery>
 ) -> Result<(StatusCode, HeaderMap, StreamBody<ReaderStream<File>>), PithosError> {
     let AppState { config, .. } = state;
 
@@ -214,5 +224,12 @@ async fn signed_download_handler(
 
     let mut headers = HeaderMap::new();
     headers.insert("Content-Length", HeaderValue::from(size));
+    if let Some(hint) = options.type_hint {
+        if let Ok(value) = HeaderValue::try_from(hint.to_string()) {
+            headers.insert("Content-Type", value);
+            headers.insert("Content-Disposition", HeaderValue::from_static("inline"));
+        }
+    }
+
     Ok((StatusCode::OK, headers, body))
 }

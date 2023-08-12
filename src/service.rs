@@ -1,12 +1,12 @@
 //! Contains services that can be used to generate URLs for accessing files.
 
 use core::fmt::{self, Display, Formatter};
-use std::net::IpAddr;
 use core::time::Duration;
 use std::collections::HashMap;
 use async_trait::async_trait;
 use google_cloud_storage::client::Client;
 use google_cloud_storage::sign::{SignedURLMethod, SignedURLOptions};
+use mime::Mime;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use crate::errors::PithosError;
@@ -15,11 +15,6 @@ use crate::errors::PithosError;
 pub enum AvailableService {
     LocalStorage,
     GoogleCloudStorage
-}
-
-pub struct RequestContext {
-    pub(crate) ip: IpAddr,
-    pub(crate) location: String
 }
 
 /// Represents a response to a file upload request.
@@ -41,8 +36,8 @@ pub struct DownloadHandle {
 /// A service that can be used to generate URLs for accessing files.
 #[async_trait]
 pub trait Service: Display + Sync + Send {
-    async fn request_upload_url(&self, ctx: RequestContext, length: u64) -> Result<UploadHandle, PithosError>;
-    async fn request_download_url(&self, ctx: RequestContext, file_identifier: Uuid) -> Result<DownloadHandle, PithosError>;
+    async fn request_upload_url(&self, length: u64) -> Result<UploadHandle, PithosError>;
+    async fn request_download_url(&self, type_hint: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError>;
 }
 
 pub struct LocalStorage {
@@ -64,7 +59,7 @@ impl Display for LocalStorage {
 
 #[async_trait]
 impl Service for LocalStorage {
-    async fn request_upload_url(&self, _: RequestContext, _: u64) -> Result<UploadHandle, PithosError> {
+    async fn request_upload_url(&self, _: u64) -> Result<UploadHandle, PithosError> {
         let uuid = Uuid::new_v4();
 
         let url = axum_signed_urls::build(&format!("{}/{}", self.upload_path, uuid), HashMap::new())
@@ -72,8 +67,14 @@ impl Service for LocalStorage {
         Ok(UploadHandle { url, uuid })
     }
 
-    async fn request_download_url(&self, _: RequestContext, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
-        let url = axum_signed_urls::build(&format!("{}/{}", self.download_path, file_identifier), HashMap::new())
+    async fn request_download_url(&self, hint: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
+        let mut query = HashMap::new();
+
+        if let Some(hint) = hint {
+            query.insert("type_hint", hint.to_string());
+        }
+
+        let url = axum_signed_urls::build(&format!("{}/{}", self.download_path, file_identifier), query.iter().map(|(k, v)| (*k, v.as_str())).collect())
             .map_err(|e| { PithosError::Access(e.into()) })?;
 
         Ok(DownloadHandle { url })
@@ -106,7 +107,7 @@ impl Display for GoogleCloudStorage {
 
 #[async_trait]
 impl Service for GoogleCloudStorage {
-    async fn request_upload_url(&self, _: RequestContext, length: u64) -> Result<UploadHandle, PithosError> {
+    async fn request_upload_url(&self, length: u64) -> Result<UploadHandle, PithosError> {
         let uuid = Uuid::new_v4();
 
         let url = self.client.signed_url(
@@ -123,7 +124,7 @@ impl Service for GoogleCloudStorage {
         Ok(UploadHandle { url, uuid })
     }
 
-    async fn request_download_url(&self, _: RequestContext, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
+    async fn request_download_url(&self, _: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
         Ok(DownloadHandle {
             url: self.client.signed_url(
             &self.bucket_name,
