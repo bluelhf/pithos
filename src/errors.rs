@@ -7,6 +7,8 @@ use axum::response::{IntoResponse, Response};
 use google_cloud_storage::sign::SignedURLError;
 use http::status::StatusCode;
 
+use crate::file_extensions::ExtensionError;
+
 use serde_json::json;
 use tracing::error;
 
@@ -22,7 +24,9 @@ pub enum PithosError {
     /// The request succeeded, but an internal error occurred when attempting to write the file.
     ServerError(Box<dyn Error>),
     /// The local file being requested doesn't exist.
-    NoSuchFile
+    NoSuchFile,
+    /// The requested file extension wasn't valid, as it must match /(\.\p{Alnum}+)+/
+    InvalidExtension(Box<dyn Error>)
 }
 
 impl PithosError {
@@ -32,7 +36,8 @@ impl PithosError {
             Self::TooLarge(_, _) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Blocked => StatusCode::FORBIDDEN,
             Self::Access(_) | Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
-            Self::NoSuchFile => StatusCode::NOT_FOUND
+            Self::NoSuchFile => StatusCode::NOT_FOUND,
+            Self::InvalidExtension(_) => StatusCode::BAD_REQUEST
         }
     }
 }
@@ -45,6 +50,7 @@ impl Display for PithosError {
             Self::Access(_) => { write!(f, "The server failed to create an access URL") }
             Self::ServerError(_) => { write!(f, "The storage server failed to store the file.") }
             Self::NoSuchFile => { write!(f, "The file being requested doesn't exist. ") }
+            Self::InvalidExtension(_) => { write!(f, "The requested file extension was invalid. It must be one or more groups of a dot followed by unicode alphanumerics.") }
         }
     }
 }
@@ -53,7 +59,7 @@ impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile => None,
-            Self::Access(e) | Self::ServerError(e) => Some(&**e),
+            Self::Access(e) | Self::ServerError(e) | Self::InvalidExtension(e) => Some(&**e),
         }
     }
 }
@@ -61,6 +67,12 @@ impl Error for PithosError {
 impl From<SignedURLError> for PithosError {
     fn from(e: SignedURLError) -> Self {
         Self::Access(Box::new(e))
+    }
+}
+
+impl From<ExtensionError> for PithosError {
+    fn from(e: ExtensionError) -> Self {
+        Self::InvalidExtension(Box::new(e))
     }
 }
 

@@ -1,8 +1,6 @@
 //! Pithos is a simple file-sharing service.
-#![feature(async_fn_in_trait)]
 #![feature(seek_stream_len)]
 #![feature(trivial_bounds)]
-#![feature(async_closure)]
 #![feature(try_blocks)]
 
 #![warn(
@@ -40,10 +38,12 @@ use crate::config::Config;
 use crate::custom_headers::{X_FILE_SIZE, XFileSize};
 use crate::errors::PithosError;
 use crate::service::{AvailableService, DownloadHandle, GoogleCloudStorage, LocalStorage, Service, UploadHandle};
+use crate::file_extensions::FileExt;
 
 mod errors;
 mod service;
 mod config;
+mod file_extensions;
 mod custom_headers;
 
 /// Represents the state of the application at any given time.
@@ -152,6 +152,9 @@ async fn upload_handler(
 pub struct DownloadQuery {
     #[serde_as(as = "Option<DisplayFromStr>")]
     type_hint: Option<Mime>,
+
+    #[serde_as(as = "Option<DisplayFromStr>")]
+    ext_hint: Option<FileExt>
 }
 
 /// Handles requests to download a file, redirecting them to the service.
@@ -161,7 +164,7 @@ async fn download_handler(
     Path(uuid): Path<Uuid>,
     Query(options): Query<DownloadQuery>
 ) -> Result<Json<DownloadHandle>, PithosError> {
-    let handle = state.service.request_download_url(options.type_hint, uuid).await?;
+    let handle = state.service.request_download_url(options.type_hint, options.ext_hint, uuid).await?;
     Ok(Json(handle))
 }
 
@@ -229,6 +232,12 @@ async fn signed_download_handler(
         if let Ok(value) = HeaderValue::try_from(hint.to_string()) {
             headers.insert("Content-Type", value);
             headers.insert("Content-Disposition", HeaderValue::from_static("inline"));
+        }
+    }
+
+    if let Some(ext_hint) = options.ext_hint {
+        if let Ok(value) = HeaderValue::try_from(format!("attachment; filename=\"{uuid}{ext}\"", ext = ext_hint.0)) {
+            headers.insert("Content-Disposition", value);
         }
     }
 

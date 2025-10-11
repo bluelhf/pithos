@@ -10,6 +10,7 @@ use mime::Mime;
 use uuid::Uuid;
 use serde::{Deserialize, Serialize};
 use crate::errors::PithosError;
+use crate::file_extensions::FileExt;
 
 #[derive(Deserialize, Copy, Clone)]
 pub enum AvailableService {
@@ -37,7 +38,7 @@ pub struct DownloadHandle {
 #[async_trait]
 pub trait Service: Display + Sync + Send {
     async fn request_upload_url(&self, length: u64) -> Result<UploadHandle, PithosError>;
-    async fn request_download_url(&self, type_hint: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError>;
+    async fn request_download_url(&self, type_hint: Option<Mime>, extension_hint: Option<FileExt>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError>;
 }
 
 pub struct LocalStorage {
@@ -67,11 +68,15 @@ impl Service for LocalStorage {
         Ok(UploadHandle { url, uuid })
     }
 
-    async fn request_download_url(&self, hint: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
+    async fn request_download_url(&self, hint: Option<Mime>, ext_hint: Option<FileExt>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
         let mut query = HashMap::new();
 
         if let Some(hint) = hint {
             query.insert("type_hint", hint.to_string());
+        }
+
+        if let Some(ext_hint) = ext_hint {
+            query.insert("ext_hint", ext_hint.0);
         }
 
         let url = axum_signed_urls::build(&format!("{}/{}", self.download_path, file_identifier), query.iter().map(|(k, v)| (*k, v.as_str())).collect())
@@ -124,7 +129,7 @@ impl Service for GoogleCloudStorage {
         Ok(UploadHandle { url, uuid })
     }
 
-    async fn request_download_url(&self, _: Option<Mime>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
+    async fn request_download_url(&self, _: Option<Mime>, _: Option<FileExt>, file_identifier: Uuid) -> Result<DownloadHandle, PithosError> {
         Ok(DownloadHandle {
             url: self.client.signed_url(
             &self.bucket_name,
