@@ -8,7 +8,7 @@ pub struct FileExt(pub String);
 
 pub const MAX_EXTENSION_LENGTH: usize = 32;
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub enum ExtensionError {
     NotAlphanumeric(char),
     DoesNotStartWithDot(char),

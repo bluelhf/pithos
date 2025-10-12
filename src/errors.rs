@@ -4,6 +4,7 @@ use std::error::Error;
 use core::fmt::{self, Debug, Display, Formatter};
 use axum::{http, Json};
 use axum::response::{IntoResponse, Response};
+use axum::extract::rejection::QueryRejection;
 use google_cloud_storage::sign::SignedURLError;
 use http::status::StatusCode;
 
@@ -25,8 +26,8 @@ pub enum PithosError {
     ServerError(Box<dyn Error>),
     /// The local file being requested doesn't exist.
     NoSuchFile,
-    /// The requested file extension wasn't valid, as it must match /(\.\p{Alnum}+)+/
-    InvalidExtension(Box<dyn Error>)
+    /// The requested query parameters were invalid
+    InvalidQuery(Box<dyn Error>),
 }
 
 impl PithosError {
@@ -37,7 +38,7 @@ impl PithosError {
             Self::Blocked => StatusCode::FORBIDDEN,
             Self::Access(_) | Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NoSuchFile => StatusCode::NOT_FOUND,
-            Self::InvalidExtension(_) => StatusCode::BAD_REQUEST
+            Self::InvalidQuery(_) => StatusCode::BAD_REQUEST
         }
     }
 }
@@ -50,7 +51,13 @@ impl Display for PithosError {
             Self::Access(_) => { write!(f, "The server failed to create an access URL") }
             Self::ServerError(_) => { write!(f, "The storage server failed to store the file.") }
             Self::NoSuchFile => { write!(f, "The file being requested doesn't exist. ") }
-            Self::InvalidExtension(_) => { write!(f, "The requested file extension was invalid. It must be one or more groups of a dot followed by unicode alphanumerics.") }
+            Self::InvalidQuery(e) => {
+                let mut root_ref: &(dyn Error + 'static) = &**e;
+                while let Some(source) = root_ref.source() {
+                    root_ref = source;
+                }
+                write!(f, "The requested query parameters were invalid: {root_ref}.")
+            }
         }
     }
 }
@@ -59,7 +66,7 @@ impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile => None,
-            Self::Access(e) | Self::ServerError(e) | Self::InvalidExtension(e) => Some(&**e),
+            Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e) => Some(&**e),
         }
     }
 }
@@ -72,7 +79,13 @@ impl From<SignedURLError> for PithosError {
 
 impl From<ExtensionError> for PithosError {
     fn from(e: ExtensionError) -> Self {
-        Self::InvalidExtension(Box::new(e))
+        Self::InvalidQuery(Box::new(e))
+    }
+}
+
+impl From<QueryRejection> for PithosError {
+    fn from(e: QueryRejection) -> Self {
+        Self::InvalidQuery(Box::new(e))
     }
 }
 

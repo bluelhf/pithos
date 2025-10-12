@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use serde_with::{serde_as, DisplayFromStr};
 
 use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
-use axum::extract::{BodyStream, Query};
+use axum::extract::{BodyStream, Query, FromRequestParts};
 use axum::http::{HeaderMap, HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::Response;
@@ -157,12 +157,16 @@ pub struct DownloadQuery {
     ext_hint: Option<FileExt>
 }
 
+#[derive(FromRequestParts)]
+#[from_request(via(axum::extract::Query), rejection(PithosError))]
+pub struct QueryExtractor<T>(pub T);
+
 /// Handles requests to download a file, redirecting them to the service.
 #[axum::debug_handler]
 async fn download_handler(
     State(state): State<&'static AppState>,
     Path(uuid): Path<Uuid>,
-    Query(options): Query<DownloadQuery>
+    QueryExtractor(options): QueryExtractor<DownloadQuery>
 ) -> Result<Json<DownloadHandle>, PithosError> {
     let handle = state.service.request_download_url(options.type_hint, options.ext_hint, uuid).await?;
     Ok(Json(handle))
