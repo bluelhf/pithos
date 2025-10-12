@@ -92,8 +92,20 @@ the URL if it is relative, and upload the file to the resolved URL using the `PU
 Returns a [Download Success](#download-success) object. The client should then resolve
 the URL if it is relative, and download the file from the resolved URL using the `GET` method.
 
+The client may specify, in query parameters, a MIME type for the download link using the `type_hint` query parameter.
+It may additionally specify a file extension using the `ext_hint` query parameter. The file extension is limited
+to 32 characters, and it must consist of at least one group of a dot followed by one or more alphanumeric characters,
+that is to say, it must match the regular expression `/(\.\p{IsAlphanumeric}+)+/` and be at most of length 32.
+
+Pithos _may_ use these hints to influence the `Content-Type` and `Content-Disposition` headers that the resource
+at the [Download Success](#download-success) object's URL will be served with. For example, it is the case for Pithos'
+locally stored files that if a valid MIME type is declared as `type_hint` without an `ext_hint`, then the file will have
+`Content-Type: <type_hint>; Content-Disposition: inline;`. If a valid `ext_hint` is declared, it will instead have
+`Content-Disposition: attachment; filename="<uuid><ext_hint>"`.
+
 If the file does not exist, this endpoint will still succeed, but the request to the
 resolved URL will respond with a <kbd>404 Not Found</kbd> error.
+
 
 ## Object Reference
 
@@ -111,6 +123,7 @@ All API responses are JSON objects.
 | Key   | Type   | Description                                                        |
 |-------|--------|--------------------------------------------------------------------|
 | `url` | String | The (possibly relative) URL from which the file can be downloaded. |
+
 
 ## Errors
 
