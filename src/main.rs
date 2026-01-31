@@ -290,5 +290,5 @@ async fn signed_download_handler(
         }
     }
 
-    Ok((StatusCode::OK, headers, body))
+    Ok((if perhaps_bounds.is_some() { StatusCode::PARTIAL_CONTENT } else { StatusCode::OK }, headers, body))
 }
