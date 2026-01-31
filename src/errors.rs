@@ -22,6 +22,8 @@ pub enum PithosError {
     TooLarge(u64, u64),
     /// The user is blocked from using this service, i.e. their IP is on the blacklist.
     Blocked,
+    /// The user requested a byte range that is outside the file's current data.
+    InvalidRange(u64, u64, u64),
     /// The request succeeded, but an internal error occurred when attempting to write the file.
     ServerError(Box<dyn Error>),
     /// The local file being requested doesn't exist.
@@ -38,6 +40,7 @@ impl PithosError {
             Self::Blocked => StatusCode::FORBIDDEN,
             Self::Access(_) | Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NoSuchFile => StatusCode::NOT_FOUND,
+            Self::InvalidRange(_, _, _) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::InvalidQuery(_) => StatusCode::BAD_REQUEST
         }
     }
@@ -58,6 +61,7 @@ impl Display for PithosError {
                 }
                 write!(f, "The requested query parameters were invalid: {root_ref}.")
             }
+            Self::InvalidRange(start, end, length) => { write!(f, "The requested range, {start}-{end} bytes, is invalid, as the file is only {length} bytes in size.")}
         }
     }
 }
@@ -65,7 +69,7 @@ impl Display for PithosError {
 impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile => None,
+            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) => None,
             Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e) => Some(&**e),
         }
     }
