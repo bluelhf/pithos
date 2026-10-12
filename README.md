@@ -9,14 +9,6 @@ front-end repository.
 
 ## Maintaining an instance
 
-### Requirements
-
-- Rust
-- Google Cloud Storage account
-- Associated GCS bucket
-
-### Setup
-
 1. Clone this repository
 2. Configure as explained in [Configuration](#configuration).
 3. Run Pithos with `cargo run --release`
@@ -35,6 +27,8 @@ storage provider.
    - `AXUM_SECRET` - A custom, highly random string to use as a secret for signing URLs.
 
 ### Configuring Pithos for Google Cloud Storage
+
+Requirements: Google Cloud Storage with at least one bucket
 
 1. In `Config.toml`:
    1. Set `service` to `GoogleCloudStorage`.
@@ -131,8 +125,10 @@ All errors contain an `error` key, which is a human-readable string
 describing the error. Errors should be identified by their HTTP status code, which
 will be non-OK.
 
-### Access Error <kbd>500 Internal Server Error</kbd>
-Sent when the server encounters an error while trying to generate the Access URL.
+### Server Error / Access Error <kbd>500 Internal Server Error</kbd>
+Sent when an internal error, for which additional details are withheld, was encountered.
+
+For access errors, i.e. those encountered while generating a signed URL, this error type contains additional information.
 
 ### File Too Large <kbd>413 Payload Too Large</kbd>
 Sent when the file is larger than the configured maximum file size. The maximum file size
@@ -141,3 +137,12 @@ is 200 GiB by default.
 ### Blocked <kbd>403 Forbidden</kbd>
 Sent when the client is not allowed to use this service, i.e. if they have been
 placed on the IP address blacklist.
+
+### Invalid Range <kbd>416 Range Not Satisfiable</kbd>
+Sent when the `Range` header used in a download request is invalid for the file being requested, as per RFC 9110.
+
+### No Such File <kbd>404 File Not Found</kbd>
+Sent when the requested file does not exist.
+
+### Invalid Query <kbd>400 Bad Request</kbd>
+Sent when the query parameters are invalid, for example when specifying a `type_hint` that is not a valid media type (MIME).
