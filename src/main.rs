@@ -187,11 +187,6 @@ impl<S: Send + Sync> FromRequestParts<S> for Signed {
     type Rejection = PithosError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        // SignedUrl unwraps the query string, so it would panic (and abort the connection) without one
-        if parts.uri.query().is_none() {
-            return Err(PithosError::InvalidSignature);
-        }
-
         SignedUrl::from_request_parts(parts, state).await
             .map(|_| Self)
             .map_err(|_| PithosError::InvalidSignature)

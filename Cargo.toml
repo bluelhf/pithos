@@ -35,7 +35,7 @@ serde = { version = "1.0.166", features = ["derive"] }
 google-cloud-storage = "0.12.0"
 toml = { version = "0.7.5", features = ["parse"], default-features = false }
 serde_json = "1.0.99"
-axum-signed-urls = "0.1.1"
+axum-signed-urls = { git = "https://github.com/bluelhf/axum-signed-urls", rev = "bfe8c1f2ac67ef7e995b83cc36b0f641323a2993" }
 dotenv = "0.15.0"
 mime = "0.3.17"
 serde_with = "3.2.0"
