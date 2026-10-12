@@ -232,7 +232,7 @@ async fn signed_download_handler(
 
     let total_file_size = file.metadata().await.map_err(|e| PithosError::ServerError(Box::new(e)))?.len();
 
-    // Multiple ranges are ignored, as only a single range can be served.
+    // headers 0.4 would come with a helper that does this, but it botches RFC 9110 and axum-signed-urls pins us to 0.6 anyway...
     fn resolve_range(range: &headers::Range, total_file_size: u64) -> Result<Option<(u64, u64)>, PithosError> {
         let mut specs = range.iter();
         let (Some((start, end)), None) = (specs.next(), specs.next()) else { return Ok(None) };
