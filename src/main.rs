@@ -228,10 +228,10 @@ async fn download_handler(
     Ok(Json(handle))
 }
 
-/// The query parameters of a signed upload URL.
+/// Query parameters of a signed upload URL.
 #[derive(Deserialize)]
 pub struct UploadQuery {
-    /// The size declared when the URL was requested. Covered by the URL's signature, so the client cannot alter it.
+    /// The upload's declared size, as signed by the server.
     length: u64,
 }
 
@@ -260,14 +260,11 @@ async fn signed_upload_handler(
     let mut file = File::create(&file_path).await
         .map_err(|e| PithosError::ServerError(Box::new(e)))?;
 
-    // Content-Length is client-controlled (and absent for chunked bodies), so count the bytes actually received.
-    // Reading one byte past the declared length is enough to tell an oversized body from one that exactly fits.
     let body_with_io_error = body.map_err(|err| Error::new(ErrorKind::Other, err));
-    let mut body_reader = StreamReader::new(body_with_io_error).take(length.saturating_add(1));
+    let mut body_reader = StreamReader::new(body_with_io_error).take(length.saturating_add(1)); // 1 extra byte to identify large payloads
     let received = tokio::io::copy_buf(&mut body_reader, &mut file).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
 
     if received > length {
-        // close the handle before unlinking, and don't keep the partial upload around
         drop(file);
         let _ = fs::remove_file(&file_path).await;
         return Err(PithosError::BodyTooLarge(length));
