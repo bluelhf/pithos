@@ -60,10 +60,12 @@ impl Display for LocalStorage {
 
 #[async_trait]
 impl Service for LocalStorage {
-    async fn request_upload_url(&self, _: u64) -> Result<UploadHandle, PithosError> {
+    async fn request_upload_url(&self, length: u64) -> Result<UploadHandle, PithosError> {
         let uuid = Uuid::new_v4();
 
-        let url = axum_signed_urls::build(&format!("{}/{}", self.upload_path, uuid), HashMap::new())
+        // the declared length is covered by the URL's signature, so the upload handler can enforce it without trusting the client
+        let length = length.to_string();
+        let url = axum_signed_urls::build(&format!("{}/{}", self.upload_path, uuid), HashMap::from([("length", length.as_str())]))
             .map_err(|e| { PithosError::Access(e.into()) })?;
         Ok(UploadHandle { url, uuid })
     }

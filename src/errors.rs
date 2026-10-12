@@ -20,6 +20,8 @@ pub enum PithosError {
     Access(Box<dyn Error>),
     /// The file that the user wants to upload is larger than the configured maximum upload size.
     TooLarge(u64, u64),
+    /// The body of an upload exceeded the size declared when its signed URL was requested.
+    BodyTooLarge(u64),
     /// The user is blocked from using this service, i.e. their IP is on the blacklist.
     Blocked,
     /// The user requested a byte range that is outside the file's current data.
@@ -44,7 +46,7 @@ impl PithosError {
     /// Returns the HTTP status code for this error.
     pub const fn status_code(&self) -> StatusCode {
         match self {
-            Self::TooLarge(_, _) => StatusCode::PAYLOAD_TOO_LARGE,
+            Self::TooLarge(_, _) | Self::BodyTooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Blocked => StatusCode::FORBIDDEN,
             Self::Access(_) | Self::ServerError(_) | Self::UnknownClient(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NoSuchFile => StatusCode::NOT_FOUND,
@@ -59,6 +61,7 @@ impl Display for PithosError {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Self::TooLarge(given, max) => { write!(f, "The file you tried to upload was too large. The maximum file size is {max} bytes, but you tried to upload {given} bytes.") }
+            Self::BodyTooLarge(declared) => { write!(f, "The upload exceeded the declared file size of {declared} bytes and was discarded.") }
             Self::Blocked => { write!(f, "You are blocked from using this service.") }
             Self::Access(_) => { write!(f, "The server failed to create an access URL") }
             Self::ServerError(_) => { write!(f, "The storage server failed to store the file.") }
@@ -82,7 +85,7 @@ impl Display for PithosError {
 impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) | Self::InvalidSignature => None,
+            Self::TooLarge(_, _) | Self::BodyTooLarge(_) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) | Self::InvalidSignature => None,
             Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e)
             | Self::InvalidHeader(e) | Self::InvalidPath(e) | Self::UnknownClient(e) => Some(&**e),
         }

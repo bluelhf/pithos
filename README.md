@@ -132,7 +132,8 @@ For access errors, i.e. those encountered while generating a signed URL, this er
 
 ### File Too Large <kbd>413 Payload Too Large</kbd>
 Sent when the file is larger than the configured maximum file size. The maximum file size
-is 200 GiB by default.
+is 200 GiB by default. When using local storage, the same error is sent from the signed upload URL
+if the body actually received is larger than the `X-File-Size` declared for it; the partial file is discarded.
 
 ### Blocked <kbd>403 Forbidden</kbd>
 Sent when the client is not allowed to use this service, i.e. if they have been

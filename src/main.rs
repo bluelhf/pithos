@@ -228,15 +228,24 @@ async fn download_handler(
     Ok(Json(handle))
 }
 
+/// The query parameters of a signed upload URL.
+#[derive(Deserialize)]
+pub struct UploadQuery {
+    /// The size declared when the URL was requested. Covered by the URL's signature, so the client cannot alter it.
+    length: u64,
+}
+
 /// Handles requests to upload a file to the local Pithos storage.
 #[axum::debug_handler]
 async fn signed_upload_handler(
     State(state): State<&'static AppState>,
     _: Signed,
     PathExtractor(uuid): PathExtractor<Uuid>,
+    QueryExtractor(UploadQuery { length }): QueryExtractor<UploadQuery>,
     body: BodyStream
 ) -> Result<StatusCode, PithosError> {
     use tokio::fs;
+    use tokio::io::AsyncReadExt;
     use tokio_util::io::StreamReader;
 
     let AppState { config, .. } = state;
@@ -247,12 +256,22 @@ async fn signed_upload_handler(
         r => r.map_err(|e| PithosError::ServerError(Box::new(e)))?
     }
 
-    let mut file = File::create(path.join(uuid.to_string())).await
+    let file_path = path.join(uuid.to_string());
+    let mut file = File::create(&file_path).await
         .map_err(|e| PithosError::ServerError(Box::new(e)))?;
 
+    // Content-Length is client-controlled (and absent for chunked bodies), so count the bytes actually received.
+    // Reading one byte past the declared length is enough to tell an oversized body from one that exactly fits.
     let body_with_io_error = body.map_err(|err| Error::new(ErrorKind::Other, err));
-    let mut body_reader = StreamReader::new(body_with_io_error);
-    tokio::io::copy_buf(&mut body_reader, &mut file).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
+    let mut body_reader = StreamReader::new(body_with_io_error).take(length.saturating_add(1));
+    let received = tokio::io::copy_buf(&mut body_reader, &mut file).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
+
+    if received > length {
+        // close the handle before unlinking, and don't keep the partial upload around
+        drop(file);
+        let _ = fs::remove_file(&file_path).await;
+        return Err(PithosError::BodyTooLarge(length));
+    }
 
     Ok(StatusCode::ACCEPTED)
 }
