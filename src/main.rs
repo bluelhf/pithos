@@ -232,43 +232,50 @@ async fn signed_download_handler(
 
     let total_file_size = file.metadata().await.map_err(|e| PithosError::ServerError(Box::new(e)))?.len();
 
-    let perhaps_bounds = 'bounds: {
-        let Some(TypedHeader(range_spec)) = perhaps_range else { break 'bounds None };
-        let Some((start, end)) = range_spec.iter().next() else { break 'bounds None };
-        if range_spec.iter().count() > 1 { break 'bounds None };
+    // Multiple ranges are ignored, as only a single range can be served.
+    fn resolve_range(range: &headers::Range, total_file_size: u64) -> Result<Option<(u64, u64)>, PithosError> {
+        let mut specs = range.iter();
+        let (Some((start, end)), None) = (specs.next(), specs.next()) else { return Ok(None) };
+        let final_byte = total_file_size.saturating_sub(1);
 
-        let first_byte = match start {
-            Bound::Included(index) => index,
-            Bound::Excluded(index) => index.saturating_add(1),
-            Bound::Unbounded => 0
+        let (first_byte, last_byte) = match (start, end) {
+            (Bound::Unbounded, Bound::Included(suffix_length)) => (total_file_size.saturating_sub(suffix_length), final_byte),
+            _ => (
+                match start {
+                    Bound::Included(index) => index,
+                    Bound::Excluded(index) => index.saturating_add(1),
+                    Bound::Unbounded => 0
+                },
+                match end {
+                    Bound::Included(index) => index,
+                    Bound::Excluded(index) => index.saturating_sub(1),
+                    Bound::Unbounded => final_byte
+                }
+            )
         };
 
-        let last_byte = match end {
-            Bound::Included(index) => index,
-            Bound::Excluded(index) => index.saturating_sub(1),
-            Bound::Unbounded => total_file_size.saturating_sub(1)
-        };
+        if first_byte >= total_file_size { return Err(PithosError::InvalidRange(first_byte, last_byte, total_file_size)); }
 
-        if first_byte >= total_file_size || last_byte >= total_file_size { break 'bounds None; }
+        let last_byte = last_byte.min(final_byte);
+        Ok((first_byte <= last_byte).then_some((first_byte, last_byte)))
+    }
 
-        Some((first_byte, last_byte))
-    };
+    let perhaps_bounds = perhaps_range
+        .map(|TypedHeader(range)| resolve_range(&range, total_file_size))
+        .transpose()?
+        .flatten();
 
-    let reader_stream = 'stream: {
-        if let Some((first_byte, last_byte)) = perhaps_bounds {
-            let range_size = last_byte.saturating_sub(first_byte.saturating_sub(1));
+    let size = perhaps_bounds.map_or(total_file_size, |(first_byte, last_byte)| last_byte - first_byte + 1);
+
+    let reader_stream = {
+        if let Some((first_byte, _)) = perhaps_bounds {
             file.seek(SeekFrom::Start(first_byte)).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
-            break 'stream ReaderStream::new(file).take(range_size.try_into().map_err(|e| PithosError::ServerError(Box::new(e)))?);
         }
 
-        ReaderStream::new(file).take(total_file_size.try_into().map_err(|e| PithosError::ServerError(Box::new(e)))?)
+        ReaderStream::new(file).take(size.try_into().map_err(|e| PithosError::ServerError(Box::new(e)))?)
     };
 
     let body = StreamBody::new(reader_stream);
-
-    let size = perhaps_bounds
-        .map(|(first_byte, last_byte)| last_byte.saturating_sub(first_byte.saturating_sub(1)))
-        .unwrap_or(total_file_size);
 
     let mut headers = HeaderMap::new();
     headers.insert("Content-Length", HeaderValue::from(size));
