@@ -146,3 +146,16 @@ Sent when the requested file does not exist.
 
 ### Invalid Query <kbd>400 Bad Request</kbd>
 Sent when the query parameters are invalid, for example when specifying a `type_hint` that is not a valid media type (MIME).
+
+### Invalid Header <kbd>400 Bad Request</kbd>
+Sent when a required header, such as `X-File-Size`, is missing or malformed.
+
+### Invalid Path <kbd>400 Bad Request</kbd>
+Sent when a parameter in the path is malformed, for example when `:uuid` is not a valid UUID.
+
+### Invalid Signature <kbd>401 Unauthorized</kbd>
+Sent when the signature of a signed URL is missing or does not match.
+
+### Unknown Client <kbd>500 Internal Server Error</kbd>
+Sent when the server cannot determine the client's IP address, which usually indicates that the configured IP source is
+unavailable, for example because a required proxy header is missing.

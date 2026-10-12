@@ -14,20 +14,21 @@
 
 use std::collections::Bound;
 use std::io::{Error, ErrorKind, SeekFrom};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
 
 use serde_with::{serde_as, DisplayFromStr};
 
-use axum::{extract::{Path, State}, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
-use axum::extract::{BodyStream, Query, FromRequestParts};
+use axum::{extract::State, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
+use axum::extract::{BodyStream, FromRequestParts};
 use axum::headers::{self, HeaderMapExt};
-use axum::http::{HeaderMap, HeaderValue, Request};
+use axum::http::{request::Parts, HeaderMap, HeaderValue, Request};
 use axum::middleware::Next;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::put;
 use axum_client_ip::SecureClientIp;
 use axum_signed_urls::SignedUrl;
+use async_trait::async_trait;
 use futures::{Stream, StreamExt, TryStreamExt};
 use google_cloud_storage::client::{Client, ClientConfig};
 use tower::ServiceBuilder;
@@ -126,7 +127,7 @@ fn cors_layer() -> CorsLayer {
 }
 
 /// Filters out requests from blocked IPs.
-async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClientIp(ip): SecureClientIp, request: Request<B>, next: Next<B>) -> Result<Response, PithosError> {
+async fn filter_ips<B: Send>(State(state): State<&'static AppState>, ClientIp(ip): ClientIp, request: Request<B>, next: Next<B>) -> Result<Response, PithosError> {
     if state.config.is_blocked(&ip) {
         return Err(PithosError::Blocked);
     }
@@ -138,7 +139,7 @@ async fn filter_ips<B: Send>(State(state): State<&'static AppState>, SecureClien
 #[axum::debug_handler]
 async fn upload_handler(
     State(state): State<&'static AppState>,
-    TypedHeader(file_size): TypedHeader<XFileSize>,
+    HeaderExtractor(file_size): HeaderExtractor<XFileSize>,
 ) -> Result<(StatusCode, Json<UploadHandle>), PithosError> {
     let AppState { config, service } = state;
 
@@ -160,15 +161,67 @@ pub struct DownloadQuery {
     ext_hint: Option<FileExt>
 }
 
+
+// yes, this is the canonical way to do this in axum... see axum github issues #3229, #2587, and #2965
+
+/// Like [`axum::extract::Query`], but rejects with a [`PithosError`].
 #[derive(FromRequestParts)]
 #[from_request(via(axum::extract::Query), rejection(PithosError))]
 pub struct QueryExtractor<T>(pub T);
+
+/// Like [`axum::extract::Path`], but rejects with a [`PithosError`].
+#[derive(FromRequestParts)]
+#[from_request(via(axum::extract::Path), rejection(PithosError))]
+pub struct PathExtractor<T>(pub T);
+
+/// Like [`axum::TypedHeader`], but rejects with a [`PithosError`].
+#[derive(FromRequestParts)]
+#[from_request(via(axum::TypedHeader), rejection(PithosError))]
+pub struct HeaderExtractor<T>(pub T);
+
+/// Like [`axum_signed_urls::SignedUrl`], but rejects with a [`PithosError`].
+pub struct Signed;
+
+#[async_trait]
+impl<S: Send + Sync> FromRequestParts<S> for Signed {
+    type Rejection = PithosError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        // SignedUrl unwraps the query string, so it would panic (and abort the connection) without one
+        if parts.uri.query().is_none() {
+            return Err(PithosError::InvalidSignature);
+        }
+
+        SignedUrl::from_request_parts(parts, state).await
+            .map(|_| Self)
+            .map_err(|_| PithosError::InvalidSignature)
+    }
+}
+
+/// Like [`axum_client_ip::SecureClientIp`], but rejects with a [`PithosError`].
+pub struct ClientIp(pub IpAddr);
+
+#[async_trait]
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = PithosError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match SecureClientIp::from_request_parts(parts, state).await {
+            Ok(SecureClientIp(ip)) => Ok(Self(ip)),
+            Err(rejection) => {
+                // the rejection's message is only accessible through its response body
+                let body = hyper::body::to_bytes(rejection.into_response().into_body()).await.unwrap_or_default();
+                Err(PithosError::UnknownClient(String::from_utf8_lossy(&body).into_owned().into()))
+            }
+        }
+    }
+}
 
 /// Handles requests to download a file, redirecting them to the service.
 #[axum::debug_handler]
 async fn download_handler(
     State(state): State<&'static AppState>,
-    Path(uuid): Path<Uuid>,
+    PathExtractor(uuid): PathExtractor<Uuid>,
     QueryExtractor(options): QueryExtractor<DownloadQuery>
 ) -> Result<Json<DownloadHandle>, PithosError> {
     let handle = state.service.request_download_url(options.type_hint, options.ext_hint, uuid).await?;
@@ -179,8 +232,8 @@ async fn download_handler(
 #[axum::debug_handler]
 async fn signed_upload_handler(
     State(state): State<&'static AppState>,
-    _: SignedUrl,
-    Path(uuid): Path<Uuid>,
+    _: Signed,
+    PathExtractor(uuid): PathExtractor<Uuid>,
     body: BodyStream
 ) -> Result<StatusCode, PithosError> {
     use tokio::fs;
@@ -215,9 +268,9 @@ use tokio::io::AsyncSeekExt;
 #[axum::debug_handler]
 async fn signed_download_handler(
     State(state): State<&'static AppState>,
-    _: SignedUrl,
-    Path(uuid): Path<Uuid>,
-    Query(options): Query<DownloadQuery>,
+    _: Signed,
+    PathExtractor(uuid): PathExtractor<Uuid>,
+    QueryExtractor(options): QueryExtractor<DownloadQuery>,
     perhaps_range: Option<TypedHeader<headers::Range>>
 ) -> Result<(StatusCode, HeaderMap, StreamBody<impl Stream<Item = Result<bytes::Bytes, Error>>>), PithosError> {
     let AppState { config, .. } = state;

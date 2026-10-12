@@ -4,7 +4,7 @@ use std::error::Error;
 use core::fmt::{self, Debug, Display, Formatter};
 use axum::{http, Json};
 use axum::response::{IntoResponse, Response};
-use axum::extract::rejection::QueryRejection;
+use axum::extract::rejection::{PathRejection, QueryRejection, TypedHeaderRejection};
 use google_cloud_storage::sign::SignedURLError;
 use http::status::StatusCode;
 
@@ -30,6 +30,14 @@ pub enum PithosError {
     NoSuchFile,
     /// The requested query parameters were invalid
     InvalidQuery(Box<dyn Error>),
+    /// A request header was missing or malformed.
+    InvalidHeader(Box<dyn Error>),
+    /// A parameter in the requested path was malformed.
+    InvalidPath(Box<dyn Error>),
+    /// The signature of the requested URL is missing or does not match.
+    InvalidSignature,
+    /// The IP address of the client could not be determined.
+    UnknownClient(Box<dyn Error>),
 }
 
 impl PithosError {
@@ -38,10 +46,11 @@ impl PithosError {
         match self {
             Self::TooLarge(_, _) => StatusCode::PAYLOAD_TOO_LARGE,
             Self::Blocked => StatusCode::FORBIDDEN,
-            Self::Access(_) | Self::ServerError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Access(_) | Self::ServerError(_) | Self::UnknownClient(_) => StatusCode::INTERNAL_SERVER_ERROR,
             Self::NoSuchFile => StatusCode::NOT_FOUND,
             Self::InvalidRange(_, _, _) => StatusCode::RANGE_NOT_SATISFIABLE,
-            Self::InvalidQuery(_) => StatusCode::BAD_REQUEST
+            Self::InvalidQuery(_) | Self::InvalidHeader(_) | Self::InvalidPath(_) => StatusCode::BAD_REQUEST,
+            Self::InvalidSignature => StatusCode::UNAUTHORIZED,
         }
     }
 }
@@ -62,6 +71,10 @@ impl Display for PithosError {
                 write!(f, "The requested query parameters were invalid: {root_ref}.")
             }
             Self::InvalidRange(start, end, length) => { write!(f, "The requested range, {start}-{end} bytes, is invalid, as the file is only {length} bytes in size.")}
+            Self::InvalidHeader(e) => { write!(f, "The request headers were invalid: {e}.") }
+            Self::InvalidPath(e) => { write!(f, "The requested path was invalid: {e}.") }
+            Self::InvalidSignature => { write!(f, "The signature of the requested URL is missing or invalid.") }
+            Self::UnknownClient(_) => { write!(f, "The server failed to determine your IP address.") }
         }
     }
 }
@@ -69,8 +82,9 @@ impl Display for PithosError {
 impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) => None,
-            Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e) => Some(&**e),
+            Self::TooLarge(_, _) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) | Self::InvalidSignature => None,
+            Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e)
+            | Self::InvalidHeader(e) | Self::InvalidPath(e) | Self::UnknownClient(e) => Some(&**e),
         }
     }
 }
@@ -90,6 +104,23 @@ impl From<ExtensionError> for PithosError {
 impl From<QueryRejection> for PithosError {
     fn from(e: QueryRejection) -> Self {
         Self::InvalidQuery(Box::new(e))
+    }
+}
+
+impl From<TypedHeaderRejection> for PithosError {
+    fn from(e: TypedHeaderRejection) -> Self {
+        Self::InvalidHeader(Box::new(e))
+    }
+}
+
+impl From<PathRejection> for PithosError {
+    fn from(e: PathRejection) -> Self {
+        // axum reports path rejections caused by our own routes (rather than the client's input) as 5xx
+        if e.status().is_client_error() {
+            Self::InvalidPath(Box::new(e))
+        } else {
+            Self::ServerError(Box::new(e))
+        }
     }
 }
 
