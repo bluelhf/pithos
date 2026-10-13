@@ -13,6 +13,7 @@
 
 
 use std::collections::Bound;
+use std::env;
 use std::io::{Error, ErrorKind, SeekFrom};
 use std::net::{IpAddr, SocketAddr};
 use std::ops::RangeInclusive;
@@ -21,11 +22,11 @@ use serde_with::{serde_as, DisplayFromStr};
 
 use axum::{extract::State, http::{method::Method, StatusCode}, Json, middleware, Router, routing::get, TypedHeader};
 use axum::extract::{BodyStream, FromRequestParts};
-use axum::headers::{self, HeaderMapExt};
+use axum::headers::{self, Authorization, HeaderMapExt};
 use axum::http::{request::Parts, HeaderMap, HeaderValue, Request};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
-use axum::routing::put;
+use axum::routing::{delete, put};
 use axum_client_ip::SecureClientIp;
 use axum_signed_urls::SignedUrl;
 use async_trait::async_trait;
@@ -41,7 +42,7 @@ use mime::Mime;
 use crate::config::Config;
 use crate::custom_headers::{X_FILE_SIZE, XFileSize};
 use crate::errors::PithosError;
-use crate::service::{AvailableService, DownloadHandle, GoogleCloudStorage, LocalStorage, Service, UploadHandle};
+use crate::service::{AvailableService, DeletionHandle, DownloadHandle, GoogleCloudStorage, LocalStorage, Service, UploadHandle};
 use crate::file_extensions::FileExt;
 
 mod errors;
@@ -66,7 +67,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = initialise_config().await?;
 
     let service: Box<dyn Service> = match config.chosen_service() {
-        AvailableService::LocalStorage => { Box::new(LocalStorage::new("/signed_upload", "/signed_download")) }
+        AvailableService::LocalStorage => { Box::new(LocalStorage::new("/signed_upload", "/signed_download", "/signed_delete", env::var("AXUM_SECRET")?.into_boxed_str().into_boxed_bytes())) }
         AvailableService::GoogleCloudStorage => { Box::new(initialise_gcs_service(&config).await?) }
     };
 
@@ -78,8 +79,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/upload", get(upload_handler))
         .route("/download/:uuid", get(download_handler))
+        .route("/delete/:uuid", get(delete_handler))
         .route("/signed_upload/:uuid", put(signed_upload_handler))
         .route("/signed_download/:uuid", get(signed_download_handler))
+        .route("/signed_delete/:uuid", delete(signed_delete_handler))
         .layer(ServiceBuilder::new()
             .layer(state.config.get_ip_source().into_extension())
             .layer(middleware::from_fn_with_state(state, filter_ips))
@@ -113,8 +116,9 @@ async fn initialise_gcs_service(config: &Config) -> Result<GoogleCloudStorage, B
     let gcs_config = config.gcs_config();
 
     let service = GoogleCloudStorage::with_bucket(gcs_config.bucket_name(),
-        Client::new(ClientConfig::default().with_auth().await?));
-
+        Client::new(ClientConfig::default().with_auth().await?),
+        env::var("AXUM_SECRET")?.into_boxed_str().into_boxed_bytes()
+    );
     Ok(service)
 }
 
@@ -148,6 +152,21 @@ async fn upload_handler(
     }
 
     service.request_upload_url(file_size.0).await
+        .map(|handle| (StatusCode::CREATED, Json(handle)))
+}
+
+use axum::headers::authorization::Bearer;
+
+/// Handles requests to delete a file, redirecting them to the service.
+#[axum::debug_handler]
+async fn delete_handler(
+    State(state): State<&'static AppState>,
+    PathExtractor(uuid): PathExtractor<Uuid>,
+    HeaderExtractor(auth): HeaderExtractor<Authorization<Bearer>>,
+) -> Result<(StatusCode, Json<DeletionHandle>), PithosError> {
+    let AppState { service, .. } = state;
+
+    service.request_deletion_url(uuid, auth.0.token()).await
         .map(|handle| (StatusCode::CREATED, Json(handle)))
 }
 
@@ -266,6 +285,20 @@ async fn signed_upload_handler(
     }
 
     Ok(StatusCode::ACCEPTED)
+}
+
+/// Handles requests to delete a file from the local Pithos storage.
+#[axum::debug_handler]
+async fn signed_delete_handler(
+    State(state): State<&'static AppState>,
+    _: Signed,
+    PathExtractor(uuid): PathExtractor<Uuid>,
+) -> Result<StatusCode, PithosError> {
+    let AppState { config, .. } = state;
+    let path = config.local_storage_path();
+    tokio::fs::remove_file(path.join(uuid.to_string())).await.map_err(|e| PithosError::ServerError(Box::new(e)))?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 use axum::body::StreamBody;

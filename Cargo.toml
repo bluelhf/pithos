@@ -39,3 +39,8 @@ axum-signed-urls = { git = "https://github.com/bluelhf/axum-signed-urls", rev = 
 dotenv = "0.15.0"
 mime = "0.3.17"
 serde_with = "3.2.0"
+
+hmac = "0.13.0"
+sha2 = "0.11.1"
+hex = "0.4.3"
+name-variant = "0.1.0"

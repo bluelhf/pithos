@@ -100,6 +100,16 @@ locally stored files that if a valid MIME type is declared as `type_hint` withou
 If the file does not exist, this endpoint will still succeed, but the request to the
 resolved URL will respond with a <kbd>404 Not Found</kbd> error.
 
+`GET /delete/:uuid`
+
+| Header        | Description                   | Required |
+|---------------|-------------------------------|----------|
+| Authorization | A bearer token in the format `Bearer <management_token>` as obtained from the [`/upload`](#get-upload) endpoint. | Yes         |
+
+Returns a [Delete Success](#delete-success) object. The client should then resolve the URL if it is relative, and delete the file from the resolved URL using the `DELETE` method.
+
+If the file does not exist, for example if it has already been deleted, this endpoint will still succeed. The request to the resolved URL will respond with a `404 Not Found` error.
+
 
 ## Object Reference
 
@@ -111,6 +121,7 @@ All API responses are JSON objects.
 |--------|--------|-------------------------------------------------------------------|
 | `url`  | String | The (possibly relative) URL to which the file should be uploaded. |
 | `uuid` | String | The UUID of the file, for downloading later.                      |
+| `management_token` | String | A bearer token which may be used as authorization for endpoints such as `/delete` |
 
 ### Download Success
 
@@ -118,45 +129,35 @@ All API responses are JSON objects.
 |-------|--------|--------------------------------------------------------------------|
 | `url` | String | The (possibly relative) URL from which the file can be downloaded. |
 
+### Delete Success
+
+| Key | Type | Description |
+| --- | --- | --- |
+| `url` | String | The (possibly relative) URL to which a `DELETE` request may be issued in order to delete the file. |
+
+### Error Details
+| Key | Type | Description |
+| --- | --- | --- |
+| `name` | String | A user-friendly name for the error, such as `File too large`. | 
+| `kind` | String | An identifier for the error, such as `InvalidToken` |
+| `error` | String | A human-readable text describing the error. | 
 
 ## Errors
 
-All errors contain an `error` key, which is a human-readable string
-describing the error. Errors should be identified by their HTTP status code, which
-will be non-OK.
+Errors should be identified by their HTTP status code, which will be non-OK. An error response body _must_ either be empty or contain a valid [Error Details](#error-details) object describing the error that occurred.
 
-### Server Error / Access Error <kbd>500 Internal Server Error</kbd>
-Sent when an internal error, for which additional details are withheld, was encountered.
-
-For access errors, i.e. those encountered while generating a signed URL, this error type contains additional information.
-
-### File Too Large <kbd>413 Payload Too Large</kbd>
-Sent when the file is larger than the configured maximum file size. The maximum file size
-is 200 GiB by default. When using local storage, the same error is sent from the signed upload URL
-if the body actually received is larger than the `X-File-Size` declared for it; the partial file is discarded.
-
-### Blocked <kbd>403 Forbidden</kbd>
-Sent when the client is not allowed to use this service, i.e. if they have been
-placed on the IP address blacklist.
-
-### Invalid Range <kbd>416 Range Not Satisfiable</kbd>
-Sent when the `Range` header used in a download request is invalid for the file being requested, as per RFC 9110.
-
-### No Such File <kbd>404 File Not Found</kbd>
-Sent when the requested file does not exist.
-
-### Invalid Query <kbd>400 Bad Request</kbd>
-Sent when the query parameters are invalid, for example when specifying a `type_hint` that is not a valid media type (MIME).
-
-### Invalid Header <kbd>400 Bad Request</kbd>
-Sent when a required header, such as `X-File-Size`, is missing or malformed.
-
-### Invalid Path <kbd>400 Bad Request</kbd>
-Sent when a parameter in the path is malformed, for example when `:uuid` is not a valid UUID.
-
-### Invalid Signature <kbd>401 Unauthorized</kbd>
-Sent when the signature of a signed URL is missing or does not match.
-
-### Unknown Client <kbd>500 Internal Server Error</kbd>
-Sent when the server cannot determine the client's IP address, which usually indicates that the configured IP source is
-unavailable, for example because a required proxy header is missing.
+| Internal Name | Kind (`kind`) | Name (`name`) | Status Code | Description |
+| --- | --- | --- | --- | --- |
+| Access Error | `Access` | Internal service error | 500 <kbd>Internal Server Error</kbd> | A signed URL could not be created due to an internal error. |
+| Body Too Large | `BodyTooLarge` | Internal service error | 413 <kbd>Payload Too Large</kbd> | The body of an upload exceeded the size declared when its signed URL was requested, so it was discarded. |
+| Invalid Range | `InvalidRange` | Internal service error | 416 <kbd>Range Not Satisfiable</kbd> | The user requested a byte range that is outside the file's current data. |
+| Server Error | `ServerError` | Internal service error | 500 <kbd>Internal Server Error</kbd> | The request succeeded, but an internal error occurred when attempting to write the file. |
+| Invalid Query | `InvalidQuery` | Internal service error | 400 <kbd>Bad Request</kbd> | The requested query parameters were invalid. |
+| Invalid Header | `InvalidHeader` | Internal service error | 400 <kbd>Bad Request</kbd> | A request header was missing or malformed. |
+| Invalid Path | `InvalidPath` | Internal service error | 400 <kbd>Bad Request</kbd> | A parameter in the requested path was malformed. |
+| Invalid Token | `InvalidToken` | Internal service error | 401 <kbd>Unauthorized</kbd> | The supplied bearer token is missing or does not match. |
+| Unknown Client | `UnknownClient` | Internal service misconfiguration | 500 <kbd>Internal Server Error</kbd> | The IP address of the client could not be determined. |
+| File Too Large | `TooLarge` | File too large | 413 <kbd>Payload Too Large</kbd> | The file the user wants to upload is larger than the configured maximum upload size. |
+| No Such File | `NoSuchFile` | File not found | 404 <kbd>Not Found</kbd> | The requested local file doesn't exist. |
+| Blocked | `Blocked` | Banned from the service | 403 <kbd>Forbidden</kbd> | The user is blocked from using this service, i.e. their IP is on the blacklist. |
+| Invalid Signature | `InvalidSignature` | Session no longer valid | 401 <kbd>Unauthorized</kbd> | The signature of the requested URL is missing or does not match. |

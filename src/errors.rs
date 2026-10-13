@@ -6,15 +6,17 @@ use axum::{http, Json};
 use axum::response::{IntoResponse, Response};
 use axum::extract::rejection::{PathRejection, QueryRejection, TypedHeaderRejection};
 use google_cloud_storage::sign::SignedURLError;
+use hex::FromHexError;
+use hmac::digest::{InvalidLength, MacError};
 use http::status::StatusCode;
-
+use name_variant::NamedVariant;
 use crate::file_extensions::ExtensionError;
 
 use serde_json::json;
 use tracing::error;
 
 /// Errors that can happen when handling requests to Pithos.
-#[derive(Debug)]
+#[derive(Debug, NamedVariant)]
 pub enum PithosError {
     /// An error occurred while trying to create a signed URL.
     Access(Box<dyn Error>),
@@ -38,6 +40,8 @@ pub enum PithosError {
     InvalidPath(Box<dyn Error>),
     /// The signature of the requested URL is missing or does not match.
     InvalidSignature,
+    /// The supplied bearer token is missing or does not match.
+    InvalidToken,
     /// The IP address of the client could not be determined.
     UnknownClient(Box<dyn Error>),
 }
@@ -53,6 +57,19 @@ impl PithosError {
             Self::InvalidRange(_, _, _) => StatusCode::RANGE_NOT_SATISFIABLE,
             Self::InvalidQuery(_) | Self::InvalidHeader(_) | Self::InvalidPath(_) => StatusCode::BAD_REQUEST,
             Self::InvalidSignature => StatusCode::UNAUTHORIZED,
+            Self::InvalidToken => StatusCode::UNAUTHORIZED,
+        }
+    }
+
+    pub const fn friendly_name(&self) -> &'static str {
+        match self {
+            Self::Access(_) | Self::BodyTooLarge(_) | Self::ServerError(_) | Self::InvalidRange(_, _, _) | Self::InvalidQuery(_)
+            | Self::InvalidHeader(_) | Self::InvalidPath(_) | Self::InvalidToken => "Internal service error",
+            Self::TooLarge(_, _) => "File too large",
+            Self::Blocked => "Banned from the service",
+            Self::NoSuchFile => "File not found",
+            Self::InvalidSignature => "Session no longer valid",
+            Self::UnknownClient(_) => "Internal service misconfiguration"
         }
     }
 }
@@ -65,7 +82,7 @@ impl Display for PithosError {
             Self::Blocked => { write!(f, "You are blocked from using this service.") }
             Self::Access(_) => { write!(f, "The server failed to create an access URL") }
             Self::ServerError(_) => { write!(f, "The storage server failed to store the file.") }
-            Self::NoSuchFile => { write!(f, "The file being requested doesn't exist. ") }
+            Self::NoSuchFile => { write!(f, "The file being requested doesn't exist.") }
             Self::InvalidQuery(e) => {
                 let mut root_ref: &(dyn Error + 'static) = &**e;
                 while let Some(source) = root_ref.source() {
@@ -77,6 +94,7 @@ impl Display for PithosError {
             Self::InvalidHeader(e) => { write!(f, "The request headers were invalid: {e}.") }
             Self::InvalidPath(e) => { write!(f, "The requested path was invalid: {e}.") }
             Self::InvalidSignature => { write!(f, "The signature of the requested URL is missing or invalid.") }
+            Self::InvalidToken => { write!(f, "The authorization token is missing or invalid.") }
             Self::UnknownClient(_) => { write!(f, "The server failed to determine your IP address.") }
         }
     }
@@ -85,7 +103,7 @@ impl Display for PithosError {
 impl Error for PithosError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::TooLarge(_, _) | Self::BodyTooLarge(_) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) | Self::InvalidSignature => None,
+            Self::TooLarge(_, _) | Self::BodyTooLarge(_) | Self::Blocked | Self::NoSuchFile | Self::InvalidRange(_, _, _) | Self::InvalidSignature | Self::InvalidToken => None,
             Self::Access(e) | Self::ServerError(e) | Self::InvalidQuery(e)
             | Self::InvalidHeader(e) | Self::InvalidPath(e) | Self::UnknownClient(e) => Some(&**e),
         }
@@ -116,6 +134,24 @@ impl From<TypedHeaderRejection> for PithosError {
     }
 }
 
+impl From<InvalidLength> for PithosError {
+    fn from(e: InvalidLength) -> Self {
+        Self::Access(Box::new(e))
+    }
+}
+
+impl From<FromHexError> for PithosError {
+    fn from(_: FromHexError) -> Self {
+        Self::InvalidToken
+    }
+}
+
+impl From<MacError> for PithosError {
+    fn from(_: MacError) -> Self {
+        Self::InvalidToken
+    }
+}
+
 impl From<PathRejection> for PithosError {
     fn from(e: PathRejection) -> Self {
         // axum reports path rejections caused by our own routes (rather than the client's input) as 5xx
@@ -135,6 +171,6 @@ impl IntoResponse for PithosError {
             error!("{self:?}");
         }
 
-        (code, Json(json!({"error": self.to_string()}))).into_response()
+        (code, Json(json!({"name": self.friendly_name(), "kind": self.variant_name(), "error": self.to_string()}))).into_response()
     }
 }
